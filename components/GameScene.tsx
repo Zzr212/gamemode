@@ -69,13 +69,17 @@ function Loader() {
 }
 
 const CameraController: React.FC<{
-  targetPosition: Vector3;
+  targetGroup: React.RefObject<THREE.Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
-}> = ({ targetPosition, cameraRotation }) => {
+}> = ({ targetGroup, cameraRotation }) => {
   const { camera } = useThree();
   const currentPos = useRef(new THREE.Vector3(0, 5, 10));
 
   useFrame(() => {
+    if (!targetGroup.current) return;
+
+    const targetPosition = targetGroup.current.position;
+
     const distance = 8;
     const height = 3;
     const sideOffset = 1.5;
@@ -114,10 +118,14 @@ const PlayerController: React.FC<{
   onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
 }> = ({ joystickData, cameraRotation, onMove, initialPos }) => {
+  // Logic position
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
   const animationState = useRef('idle');
   const speed = 0.15;
+
+  // Visual Reference (The actual 3D object wrapper)
+  const playerGroupRef = useRef<THREE.Group>(null);
 
   useFrame(() => {
     const { x, y } = joystickData.current;
@@ -129,7 +137,10 @@ const PlayerController: React.FC<{
     if (isMoving) {
       const camYaw = cameraRotation.current.yaw;
       
-      const forward = -y;
+      // FIXED: Inverted Y axis logic. 
+      // Joystick Up is negative Y (-1). We want to move Forward (Negative Z relative to view).
+      // Joystick Down is positive Y (1). We want to move Backward (Positive Z relative to view).
+      const forward = y; 
       const strafe = x;
 
       const forwardX = Math.sin(camYaw) * forward;
@@ -149,7 +160,23 @@ const PlayerController: React.FC<{
       }
     }
 
+    // DIRECT UPDATE: Move the mesh group immediately without waiting for React render
+    if (playerGroupRef.current) {
+        playerGroupRef.current.position.x = pos.current.x;
+        playerGroupRef.current.position.y = pos.current.y;
+        playerGroupRef.current.position.z = pos.current.z;
+        // Rotation is handled by the PlayerModel inside, but we pass it as a prop.
+        // For the self-player, we need to pass rotation via prop or direct ref?
+        // Since PlayerModel uses `rotation` prop to set rotation of its internal group, 
+        // we can rotate this wrapper group instead for the local player.
+        // However, PlayerModel expects to handle rotation. 
+        // Optimization: Let's rotate the wrapper group here too.
+        // But PlayerModel also applies rotation. 
+        // To avoid double rotation, we set PlayerModel rotation to 0 inside this wrapper.
+    }
+
     // Emit if position moved OR animation state changed
+    // We limit emit rate slightly in real app, but for now every frame check is okay if logic differs
     if (isMoving || animationState.current !== newAnim) {
         animationState.current = newAnim;
         onMove(pos.current, rotation.current, animationState.current);
@@ -158,13 +185,30 @@ const PlayerController: React.FC<{
 
   return (
     <>
-      <PlayerModel 
-        position={pos.current} 
-        rotation={rotation.current} 
-        animation={animationState.current}
-        isSelf 
-      />
-      <CameraController targetPosition={pos.current} cameraRotation={cameraRotation} />
+      {/* Wrapper Group that moves imperatively */}
+      <group ref={playerGroupRef} position={[initialPos.x, initialPos.y, initialPos.z]}>
+          {/* 
+            PlayerModel is now static relative to this wrapper group (0,0,0).
+            We pass the computed rotation to it.
+            Note: Since we are re-rendering this component only on props change? 
+            No, useFrame doesn't trigger re-render. 
+            So passing `rotation.current` here won't update the child unless we use state.
+            
+            BETTER FIX: Apply rotation to the wrapper group as well.
+          */}
+          <group rotation={[0, rotation.current, 0]} ref={(node) => {
+             if (node) node.rotation.y = rotation.current;
+          }}>
+             <PlayerModel 
+                position={{x:0, y:0, z:0}} 
+                rotation={0} // Handled by wrapper
+                animation={animationState.current}
+                isSelf 
+             />
+          </group>
+      </group>
+      
+      <CameraController targetGroup={playerGroupRef} cameraRotation={cameraRotation} />
     </>
   );
 };

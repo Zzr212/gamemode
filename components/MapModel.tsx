@@ -9,24 +9,20 @@ declare global {
 }
 
 export const MapModel: React.FC = () => {
-  let scene = null;
-  
-  // Safe load
-  try {
-      const gltf = useGLTF('/models/map.glb', undefined, undefined, (loader) => {
-         loader.manager.onError = () => {};
-      }) as any;
-      scene = gltf.scene;
-  } catch (e) {
-      console.warn("Map GLB not loaded, using fallback");
-  }
+  // Direct load without aggressive try-catch
+  // If map.glb is missing, onError will trigger but not crash the app
+  const gltf = useGLTF('/models/map.glb', undefined, undefined, (loader) => {
+     loader.manager.onError = (url) => console.warn(`Failed to load map: ${url}`);
+  }) as any;
+
+  const scene = gltf?.scene;
 
   return (
     <group>
       {scene ? (
         <primitive object={scene} />
       ) : (
-        // Fallback map
+        // Fallback map if loading fails
         <group>
             {/* Ground */}
             <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
