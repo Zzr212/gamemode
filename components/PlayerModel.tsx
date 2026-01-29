@@ -23,7 +23,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
   
   // CHANGED: Load .gltf instead of .glb
   const gltf = useGLTF('/models/character.gltf', undefined, undefined, (loader) => {
-     loader.manager.onError = (url) => console.warn(`Failed to load ${url}`);
+     (loader as any).manager.onError = (url: string) => console.warn(`Failed to load ${url}`);
   }) as any;
 
   const scene = gltf?.scene;

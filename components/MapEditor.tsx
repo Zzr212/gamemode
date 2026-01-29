@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { Environment, OrbitControls, TransformControls, Html, useGLTF } from '@react-three/drei';
+import { Environment, OrbitControls, TransformControls, Html } from '@react-three/drei';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
 import { Vector3 } from '../types';
@@ -52,7 +52,6 @@ const EditorScene: React.FC = () => {
       {/* Spawn Point Editor */}
       <TransformControls 
         ref={transformRef} 
-        object={meshRef} 
         mode="translate" 
         onMouseUp={handleTransformEnd}
       >
