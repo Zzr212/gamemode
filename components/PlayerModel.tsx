@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
+import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
 import * as THREE from 'three';
+// We need SkeletonUtils to properly clone skinned meshes (fixes parts staying behind)
+import { SkeletonUtils } from 'three-stdlib';
 import { ThreeElements } from '@react-three/fiber';
 
 declare global {
@@ -21,68 +24,76 @@ interface PlayerModelProps {
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, isSelf, color, animation = 'idle' }) => {
   const group = useRef<THREE.Group>(null);
   
-  // CHANGED: Load .gltf instead of .glb
-  const gltf = useGLTF('/models/character.gltf', undefined, undefined, (loader) => {
-     (loader as any).manager.onError = (url: string) => console.warn(`Failed to load ${url}`);
-  }) as any;
+  // Load the GLTF
+  const { scene, materials, animations } = useGLTF('/models/character.gltf') as any;
 
-  const scene = gltf?.scene;
-  const animations = gltf?.animations || [];
-
-  // Setup Animations
+  // CRITICAL FIX: Use SkeletonUtils.clone() to deep clone the model including SkinnedMesh relations.
+  // This fixes the bug where "helmet stays behind" while the body moves.
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  
+  // useGraph creates a fresh object graph from the clone, needed for useAnimations to bind correctly
+  const { nodes } = useGraph(clone);
+  
+  // Setup Animations on the CLONED group
   const { actions } = useAnimations(animations, group);
 
-  // Clone scene to allow multiple instances
-  const clonedScene = useMemo(() => scene ? scene.clone() : null, [scene]);
+  useEffect(() => {
+    // Traverse to enable shadows and fix frustum culling issues if mesh disappears
+    clone.traverse((object: any) => {
+      if (object.isMesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+        // Fix for models disappearing at certain angles
+        object.frustumCulled = false; 
+      }
+    });
+  }, [clone]);
 
   useEffect(() => {
-    if (actions && clonedScene) {
-        // Animation Mapping
-        // We look for 'idle' and 'run' specifically by name if possible, 
-        // otherwise fallback to index 0 and 1.
+    if (actions) {
+        // --- SMART ANIMATION MAPPING ---
+        // Instead of hardcoding keys, we search for them.
+        const allActions = Object.keys(actions);
         
-        const idleAction = actions['idle'] || actions[Object.keys(actions)[0]];
-        // CHANGED: Look for 'run' animation for movement
-        const runAction = actions['run'] || actions['walk'] || actions[Object.keys(actions)[1]]; 
+        // Helper to find action by name (case insensitive)
+        const findAction = (query: string) => 
+            allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
 
-        if (!idleAction) return;
+        // 1. Find correct clips
+        const idleKey = findAction('idle') || findAction('wait') || allActions[0];
+        const runKey = findAction('run') || findAction('walk') || allActions[1];
+        
+        const currentActionName = animation === 'walk' ? runKey : idleKey;
+        const currentAction = actions[currentActionName || ''];
 
-        // Cleanup function to fade out old actions
-        const fadeDuration = 0.2;
-
-        if (animation === 'walk') {
-            // "Walk" state now triggers "Run" animation
-            if (runAction) {
-                runAction.reset().fadeIn(fadeDuration).play();
-                idleAction.fadeOut(fadeDuration);
+        // Stop all other actions to prevent mixing weirdness (like death loop)
+        allActions.forEach(key => {
+            if (key !== currentActionName && actions[key]) {
+                actions[key]?.fadeOut(0.2);
             }
-        } else {
-            idleAction.reset().fadeIn(fadeDuration).play();
-            if (runAction) runAction.fadeOut(fadeDuration);
+        });
+
+        if (currentAction) {
+            currentAction.reset().fadeIn(0.2).play();
+            // Ensure Idle loops, Run loops. 
+            // If you had a 'death' animation playing, it's likely because it was allActions[0] and LoopOnce.
+            currentAction.setLoop(THREE.LoopRepeat, Infinity); 
         }
 
         return () => {
-            // Optional: stop on unmount or change
+            // Cleanup not strictly necessary with fadeOut logic above, but good practice
         };
     }
-  }, [animation, actions, clonedScene]);
+  }, [animation, actions]);
 
   return (
     <group ref={group} position={[position.x, position.y, position.z]} rotation={[0, rotation, 0]}>
-      {clonedScene ? (
-        <primitive object={clonedScene} scale={1} />
-      ) : (
-        // Fallback mesh
-        <mesh position={[0, 1, 0]}>
-          <capsuleGeometry args={[0.5, 1, 4, 8]} />
-          <meshStandardMaterial color={isSelf ? "#00ff00" : (color || "#ff0000")} />
-        </mesh>
-      )}
+      <primitive object={clone} scale={1} />
       
-      {/* Shadow blob */}
+      {/* Simple shadow blob for grounding */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
-        <circleGeometry args={[0.6, 32]} />
-        <meshBasicMaterial color="#000000" opacity={0.3} transparent />
+        <circleGeometry args={[0.5, 32]} />
+        <meshBasicMaterial color="#000000" opacity={0.4} transparent />
       </mesh>
     </group>
   );
