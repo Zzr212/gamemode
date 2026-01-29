@@ -1,0 +1,5 @@
+{
+  "name": "Mobile Multiplayer 3D",
+  "description": "A Node.js and React Three Fiber multiplayer game optimized for horizontal mobile play with dual-stick controls.",
+  "requestFramePermissions": []
+}
