@@ -21,18 +21,20 @@ interface PlayerModelProps {
   animation?: string; // 'idle' | 'walk'
 }
 
-export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, isSelf, color, animation = 'idle' }) => {
+export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
   const group = useRef<THREE.Group>(null);
   
   // Load the GLTF
-  const { scene, materials, animations } = useGLTF('/models/character.gltf') as any;
+  // Removed 'materials' from destructuring as it was unused
+  const { scene, animations } = useGLTF('/models/character.gltf') as any;
 
   // CRITICAL FIX: Use SkeletonUtils.clone() to deep clone the model including SkinnedMesh relations.
   // This fixes the bug where "helmet stays behind" while the body moves.
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   
   // useGraph creates a fresh object graph from the clone, needed for useAnimations to bind correctly
-  const { nodes } = useGraph(clone);
+  // We call usageGraph to register the graph, but we don't need 'nodes' variable right now
+  useGraph(clone);
   
   // Setup Animations on the CLONED group
   const { actions } = useAnimations(animations, group);
