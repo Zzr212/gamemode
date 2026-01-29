@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist-server",
+    "noEmit": false,
+    "rootDir": ".",
+    "target": "ES2020",
+    "skipLibCheck": true
+  },
+  "include": ["server/**/*", "types.ts"],
+  "exclude": ["node_modules", "dist", "vite.config.ts", "components", "services", "App.tsx", "index.tsx"]
+}
