@@ -1,4 +1,4 @@
-import React, { useRef, Suspense } from 'react';
+import React, { useRef, Suspense, Component, ReactNode } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { Environment, PerspectiveCamera, Stars, Html, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
@@ -10,6 +10,35 @@ import { socket } from '../services/socketService';
 declare global {
   namespace JSX {
     interface IntrinsicElements extends ThreeElements {}
+  }
+}
+
+// Error Boundary to prevent black screen on model load failure
+class ModelErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("3D Model Error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      // Fallback if the specific model component crashes completely
+      return (
+        <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="purple" />
+        </mesh>
+      ); 
+    }
+    return this.props.children;
   }
 }
 
@@ -161,6 +190,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
       {/* Suspense is REQUIRED for useGLTF to work without crashing or black screening initially */}
       <Suspense fallback={<Loader />}>
+        <ModelErrorBoundary>
           <MapModel />
 
           {/* Render Other Players */}
@@ -186,6 +216,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
                 initialPos={players[myId].position}
             />
           )}
+        </ModelErrorBoundary>
       </Suspense>
     </Canvas>
   );

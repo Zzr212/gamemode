@@ -57,26 +57,19 @@ io.on('connection', (socket) => {
   });
 });
 
-// Serve Static Files (Production)
-// In Dev (ts-node): __dirname is .../server. dist is ../dist
-// In Prod (node): __dirname is .../dist-server/server. dist is ../../dist
+// Serve Static Files
+// 1. Production: Serve from 'dist' (where Vite builds to)
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
+app.use(express.static(distPath) as express.RequestHandler);
+
+// 2. Fallback/Dev: Serve from 'public' folder directly. 
+// This ensures /models/character.glb works even if not fully built or copied to dist yet.
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
-
-// Explicitly serve static files from dist
-app.use(express.static(distPath));
-
-// EMERGENCY FIX: Explicitly serve .glb files from the ROOT directory
-// This fixes the issue where assets are not found because they aren't in 'dist'
-app.get('/*.glb', (req, res) => {
-    const filename = req.path; // e.g. /character.glb
-    const filePath = path.join(rootPath, filename);
-    console.log(`Serving GLB from: ${filePath}`); // Debug log
-    res.sendFile(filePath);
-});
+app.use(express.static(path.join(rootPath, 'public')) as express.RequestHandler);
 
 // Handle client-side routing by returning index.html for all other routes
-app.get('*', (req, res) => {
+// Fixed: Changed 'req' to '_req' to satisfy TypeScript unused variable check
+app.get('*', (_req: express.Request, res: express.Response) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 

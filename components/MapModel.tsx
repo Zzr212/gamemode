@@ -10,8 +10,10 @@ declare global {
 
 export const MapModel: React.FC = () => {
   let scene = null;
+  
+  // Safe load
   try {
-      const gltf = useGLTF('/map.glb', undefined, undefined, (loader) => {
+      const gltf = useGLTF('/models/map.glb', undefined, undefined, (loader) => {
          loader.manager.onError = () => {};
       }) as any;
       scene = gltf.scene;
@@ -47,3 +49,5 @@ export const MapModel: React.FC = () => {
     </group>
   );
 };
+// Preload
+useGLTF.preload('/models/map.glb');

@@ -21,11 +21,13 @@ interface PlayerModelProps {
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, isSelf, color, animation = 'idle' }) => {
   const group = useRef<THREE.Group>(null);
   
-  // Load the GLTF. If it fails, useGLTF normally throws, triggering Suspense fallback.
-  // We add a simple error handler to the loader to avoid breaking the whole app if file is missing.
-  const { scene, animations } = useGLTF('/character.glb', undefined, undefined, (loader) => {
+  // Use a try-catch pattern via the loader callback to avoid hard crashes
+  const gltf = useGLTF('/models/character.glb', undefined, undefined, (loader) => {
      loader.manager.onError = (url) => console.warn(`Failed to load ${url}`);
   }) as any;
+
+  const scene = gltf?.scene;
+  const animations = gltf?.animations || [];
 
   // Setup Animations
   const { actions } = useAnimations(animations, group);
@@ -36,12 +38,14 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
   useEffect(() => {
     if (actions && clonedScene) {
         // MAPPING:
-        // Assuming user's GLB has:
-        // Animation 0: Idle (or "1." in viewer)
-        // Animation 1: Walk (or "2." in viewer)
+        // Animation 0: Idle
+        // Animation 1: Walk
         
-        const idleAction = actions[Object.keys(actions)[0]]; // First animation
-        const walkAction = actions[Object.keys(actions)[1]] || idleAction; // Second animation (fallback to first)
+        const actionKeys = Object.keys(actions);
+        if (actionKeys.length === 0) return;
+
+        const idleAction = actions[actionKeys[0]]; // First animation
+        const walkAction = actions[actionKeys[1]] || idleAction; // Second animation (fallback to first)
 
         if (!idleAction) return;
 
@@ -84,4 +88,4 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
 };
 
 // Preload to avoid pop-in
-useGLTF.preload('/character.glb');
+useGLTF.preload('/models/character.glb');
