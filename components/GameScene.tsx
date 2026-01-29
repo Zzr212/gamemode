@@ -1,6 +1,6 @@
-import React, { useRef, Suspense, Component, ReactNode, useEffect } from 'react';
+import React, { useRef, Suspense, Component, ReactNode } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Environment, PerspectiveCamera, Stars, Html, useProgress, Loader } from '@react-three/drei';
+import { Environment, PerspectiveCamera, Stars, Loader } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
@@ -57,7 +57,6 @@ const CameraController: React.FC<{
 
     const distance = 8;
     const height = 4; // Slightly higher camera
-    const sideOffset = 0; // Centered camera feels better for platforming
 
     const yaw = cameraRotation.current.yaw;
     const pitch = Math.max(-0.2, Math.min(1.2, cameraRotation.current.pitch)); // Limit pitch to avoid going under ground

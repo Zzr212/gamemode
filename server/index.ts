@@ -78,10 +78,12 @@ io.on('connection', (socket) => {
 
 // Serve Static Files
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-app.use('/', express.static(distPath));
+// Fix: Cast express.static to RequestHandler to satisfy TypeScript overload matching
+app.use('/', express.static(distPath) as express.RequestHandler);
 
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
-app.use('/', express.static(path.join(rootPath, 'public')));
+// Fix: Cast express.static to RequestHandler to satisfy TypeScript overload matching
+app.use('/', express.static(path.join(rootPath, 'public')) as express.RequestHandler);
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
