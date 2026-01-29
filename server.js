@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(app, {
+const io = new Server(httpServer, {
   cors: {
     origin: "*", // Allow Vite dev server
     methods: ["GET", "POST"]

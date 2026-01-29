@@ -59,7 +59,7 @@ io.on('connection', (socket) => {
 // In Dev (ts-node): __dirname is .../server. dist is ../dist
 // In Prod (node): __dirname is .../dist-server/server. dist is ../../dist
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-app.use('/', express.static(distPath));
+app.use(express.static(distPath));
 
 // Handle client-side routing by returning index.html for all other routes
 app.get('*', (req, res) => {
