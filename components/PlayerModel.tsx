@@ -21,8 +21,8 @@ interface PlayerModelProps {
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, isSelf, color, animation = 'idle' }) => {
   const group = useRef<THREE.Group>(null);
   
-  // Use a try-catch pattern via the loader callback to avoid hard crashes
-  const gltf = useGLTF('/models/character.glb', undefined, undefined, (loader) => {
+  // CHANGED: Load .gltf instead of .glb
+  const gltf = useGLTF('/models/character.gltf', undefined, undefined, (loader) => {
      loader.manager.onError = (url) => console.warn(`Failed to load ${url}`);
   }) as any;
 
@@ -32,36 +32,37 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
   // Setup Animations
   const { actions } = useAnimations(animations, group);
 
-  // Clone scene to allow multiple instances (players) to have independent animations
+  // Clone scene to allow multiple instances
   const clonedScene = useMemo(() => scene ? scene.clone() : null, [scene]);
 
   useEffect(() => {
     if (actions && clonedScene) {
-        // MAPPING:
-        // Animation 0: Idle
-        // Animation 1: Walk
+        // Animation Mapping
+        // We look for 'idle' and 'run' specifically by name if possible, 
+        // otherwise fallback to index 0 and 1.
         
-        const actionKeys = Object.keys(actions);
-        if (actionKeys.length === 0) return;
-
-        const idleAction = actions[actionKeys[0]]; // First animation
-        const walkAction = actions[actionKeys[1]] || idleAction; // Second animation (fallback to first)
+        const idleAction = actions['idle'] || actions[Object.keys(actions)[0]];
+        // CHANGED: Look for 'run' animation for movement
+        const runAction = actions['run'] || actions['walk'] || actions[Object.keys(actions)[1]]; 
 
         if (!idleAction) return;
 
-        // Reset all
-        idleAction.stop();
-        if (walkAction !== idleAction) walkAction?.stop();
+        // Cleanup function to fade out old actions
+        const fadeDuration = 0.2;
 
-        if (animation === 'walk' && walkAction) {
-            walkAction.reset().fadeIn(0.2).play();
+        if (animation === 'walk') {
+            // "Walk" state now triggers "Run" animation
+            if (runAction) {
+                runAction.reset().fadeIn(fadeDuration).play();
+                idleAction.fadeOut(fadeDuration);
+            }
         } else {
-            idleAction.reset().fadeIn(0.2).play();
+            idleAction.reset().fadeIn(fadeDuration).play();
+            if (runAction) runAction.fadeOut(fadeDuration);
         }
 
         return () => {
-            idleAction.fadeOut(0.2);
-            if (walkAction !== idleAction) walkAction?.fadeOut(0.2);
+            // Optional: stop on unmount or change
         };
     }
   }, [animation, actions, clonedScene]);
@@ -71,14 +72,14 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
       {clonedScene ? (
         <primitive object={clonedScene} scale={1} />
       ) : (
-        // Fallback mesh if GLB not loaded
+        // Fallback mesh
         <mesh position={[0, 1, 0]}>
           <capsuleGeometry args={[0.5, 1, 4, 8]} />
           <meshStandardMaterial color={isSelf ? "#00ff00" : (color || "#ff0000")} />
         </mesh>
       )}
       
-      {/* Simple shadow blob */}
+      {/* Shadow blob */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
         <circleGeometry args={[0.6, 32]} />
         <meshBasicMaterial color="#000000" opacity={0.3} transparent />
@@ -87,5 +88,5 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, is
   );
 };
 
-// Preload to avoid pop-in
-useGLTF.preload('/models/character.glb');
+// Preload
+useGLTF.preload('/models/character.gltf');

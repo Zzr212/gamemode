@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { PlayerState } from '../types.js';
+import { PlayerState, Vector3 } from '../types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,21 +20,8 @@ const io = new Server(httpServer, {
 const PORT = process.env.PORT || 3000;
 
 // --- CONFIGURATION ---
-// Add safe spawn coordinates (x, y, z) here based on your map layout
-const SPAWN_POINTS = [
-    { x: 0, y: 5, z: 0 },    // Center (high up to drop down safely)
-    { x: 5, y: 5, z: 5 },
-    { x: -5, y: 5, z: -5 },
-    { x: 10, y: 5, z: 0 },
-    { x: 0, y: 5, z: 10 }
-];
-
-function getRandomSpawn() {
-    const randomIndex = Math.floor(Math.random() * SPAWN_POINTS.length);
-    const spawn = SPAWN_POINTS[randomIndex];
-    // Return a copy to avoid modifying the const
-    return { ...spawn };
-}
+// Default spawn point (editable via Map Editor)
+let globalSpawnPoint: Vector3 = { x: 0, y: 5, z: 0 };
 
 // State
 const players: Record<string, PlayerState> = {};
@@ -43,12 +30,20 @@ const players: Record<string, PlayerState> = {};
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Pick a random spawn point
-  const spawnPos = getRandomSpawn();
+  // Initial Spawn Logic: Use the global spawn point with a tiny random offset
+  // to prevent exact overlapping if multiple people join at once.
+  const spawnOffset = {
+      x: (Math.random() - 0.5) * 2,
+      z: (Math.random() - 0.5) * 2
+  };
 
   players[socket.id] = {
     id: socket.id,
-    position: spawnPos,
+    position: { 
+        x: globalSpawnPoint.x + spawnOffset.x, 
+        y: globalSpawnPoint.y, // Drop from set height
+        z: globalSpawnPoint.z + spawnOffset.z 
+    },
     rotation: 0,
     animation: 'idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
@@ -56,6 +51,9 @@ io.on('connection', (socket) => {
 
   // Send current players to new joiner
   socket.emit('currentPlayers', players);
+  
+  // Send the current spawn point (for editor)
+  socket.emit('spawnPointUpdated', globalSpawnPoint);
 
   // Broadcast new player to others
   socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -69,6 +67,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  // EDITOR: Update global spawn point
+  socket.on('updateSpawnPoint', (pos: Vector3) => {
+      globalSpawnPoint = pos;
+      // Broadcast to all editors/clients
+      io.emit('spawnPointUpdated', globalSpawnPoint);
+      console.log('New Spawn Point Set:', globalSpawnPoint);
+  });
+  
+  socket.on('requestSpawnPoint', () => {
+      socket.emit('spawnPointUpdated', globalSpawnPoint);
+  });
+
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     delete players[socket.id];
@@ -78,12 +88,10 @@ io.on('connection', (socket) => {
 
 // Serve Static Files
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-// Fix: Cast express.static to RequestHandler to satisfy TypeScript overload matching
-app.use('/', express.static(distPath) as express.RequestHandler);
+app.use('/', express.static(distPath));
 
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
-// Fix: Cast express.static to RequestHandler to satisfy TypeScript overload matching
-app.use('/', express.static(path.join(rootPath, 'public')) as express.RequestHandler);
+app.use('/', express.static(path.join(rootPath, 'public')));
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));

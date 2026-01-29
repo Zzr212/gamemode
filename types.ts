@@ -17,10 +17,15 @@ export interface ServerToClientEvents {
   newPlayer: (player: PlayerState) => void;
   playerMoved: (player: PlayerState) => void;
   playerDisconnected: (id: string) => void;
+  // Editor events
+  spawnPointUpdated: (pos: Vector3) => void;
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
+  // Editor events
+  updateSpawnPoint: (pos: Vector3) => void;
+  requestSpawnPoint: () => void;
 }
 
 export interface JoystickData {
