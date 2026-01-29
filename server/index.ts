@@ -59,7 +59,16 @@ io.on('connection', (socket) => {
 // In Dev (ts-node): __dirname is .../server. dist is ../dist
 // In Prod (node): __dirname is .../dist-server/server. dist is ../../dist
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-app.use(express.static(distPath));
+const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
+
+app.use('/', express.static(distPath));
+
+// EMERGENCY FIX: Serve .glb models from root if not found in dist
+// This handles cases where user uploads assets to root instead of public/ folder
+app.get('/*.glb', (req, res) => {
+    const filePath = path.join(rootPath, req.path);
+    res.sendFile(filePath);
+});
 
 // Handle client-side routing by returning index.html for all other routes
 app.get('*', (req, res) => {

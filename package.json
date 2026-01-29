@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "start": "NODE_ENV=production node server.js",
+    "build": "tsc && vite build && tsc -p tsconfig.server.json",
+    "start": "NODE_ENV=production node dist-server/server/index.js",
     "preview": "vite preview"
   },
   "dependencies": {

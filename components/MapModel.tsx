@@ -2,10 +2,15 @@ import React from 'react';
 import { useGLTF } from '@react-three/drei';
 
 export const MapModel: React.FC = () => {
-  // NOTE: You must place 'map.glb' in the /public folder.
-  const { scene } = useGLTF('/map.glb', undefined, undefined, (loader) => {
-      loader.manager.onError = (url) => console.warn(`Could not load ${url}, ensure file is in public folder.`);
-  }) as any;
+  let scene = null;
+  try {
+      const gltf = useGLTF('/map.glb', undefined, undefined, (loader) => {
+         loader.manager.onError = () => {};
+      }) as any;
+      scene = gltf.scene;
+  } catch (e) {
+      console.warn("Map GLB not loaded, using fallback");
+  }
 
   return (
     <group>
@@ -35,5 +40,3 @@ export const MapModel: React.FC = () => {
     </group>
   );
 };
-
-useGLTF.preload('/map.glb');

@@ -1,6 +1,6 @@
-import React, { useRef } from 'react';
+import React, { useRef, Suspense } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Environment, PerspectiveCamera, Stars } from '@react-three/drei';
+import { Environment, PerspectiveCamera, Stars, Html, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
@@ -14,6 +14,25 @@ interface GameSceneProps {
   myId: string | null;
 }
 
+// Loading UI Component
+function Loader() {
+  const { progress } = useProgress();
+  return (
+    <Html center>
+      <div className="flex flex-col items-center justify-center bg-black/80 p-6 rounded-lg border border-gray-700 backdrop-blur-md">
+        <div className="text-white font-bold text-xl mb-2">LOADING WORLD</div>
+        <div className="w-48 h-2 bg-gray-700 rounded-full overflow-hidden">
+            <div 
+                className="h-full bg-blue-500 transition-all duration-200 ease-out" 
+                style={{ width: `${progress}%` }} 
+            />
+        </div>
+        <div className="text-gray-400 text-xs mt-2 font-mono">{progress.toFixed(0)}%</div>
+      </div>
+    </Html>
+  );
+}
+
 const CameraController: React.FC<{
   targetPosition: Vector3;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
@@ -22,34 +41,21 @@ const CameraController: React.FC<{
   const currentPos = useRef(new THREE.Vector3(0, 5, 10));
 
   useFrame(() => {
-    // Convert rotation to quaternion/vectors
-    // Yaw rotates around Y axis
-    // Pitch rotates around local X axis (clamped usually)
-    
-    // We want the camera to look at the player + offset
-    // 3rd Person Offset: Behind and slightly up
     const distance = 8;
     const height = 3;
-    const sideOffset = 1.5; // "Character moved little left side on camera" means camera is to the right? Or player is to the left? 
-                            // Usually means camera looks over right shoulder (camera is right of player), 
-                            // which puts player on left side of screen.
+    const sideOffset = 1.5;
 
     const yaw = cameraRotation.current.yaw;
-    const pitch = Math.max(-0.5, Math.min(1.0, cameraRotation.current.pitch)); // Clamp pitch
+    const pitch = Math.max(-0.5, Math.min(1.0, cameraRotation.current.pitch));
 
-    // Calculate camera position relative to target
-    // Spherical coordinates logic
     const hDist = distance * Math.cos(pitch);
     const vDist = distance * Math.sin(pitch);
 
     const offsetX = Math.sin(yaw) * hDist;
     const offsetZ = Math.cos(yaw) * hDist;
 
-    // Target vector (Player Head)
     const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
 
-    // Apply side offset (Right shoulder view)
-    // Right vector relative to yaw
     const rightX = Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
     
@@ -59,12 +65,8 @@ const CameraController: React.FC<{
         targetVec.z + offsetZ + (rightZ * sideOffset)
     );
 
-    // Smooth camera movement
     currentPos.current.lerp(camPos, 0.1);
     camera.position.copy(currentPos.current);
-    
-    // Look at the target (slightly offset to keep player on left)
-    // Actually, looking directly at targetVec while physically offset creates the "over the shoulder" effect.
     camera.lookAt(targetVec);
   });
 
@@ -85,15 +87,11 @@ const PlayerController: React.FC<{
     const { x, y } = joystickData.current;
     
     if (Math.abs(x) > 0.05 || Math.abs(y) > 0.05) {
-      // Movement direction relative to Camera Yaw
       const camYaw = cameraRotation.current.yaw;
       
-      // Joystick Y is up/down (-1 is up usually, depends on joystick impl). 
-      // In our Joystick.tsx: y is positive down. So -y is forward.
       const forward = -y;
       const strafe = x;
 
-      // Calculate direction vector based on camera angle
       const forwardX = Math.sin(camYaw) * forward;
       const forwardZ = Math.cos(camYaw) * forward;
       
@@ -106,15 +104,10 @@ const PlayerController: React.FC<{
       pos.current.x += moveX * speed;
       pos.current.z += moveZ * speed;
 
-      // Character Rotation: Face movement direction
-      // Atan2(x, z) gives angle from Z axis
       if (moveX !== 0 || moveZ !== 0) {
         rotation.current = Math.atan2(moveX, moveZ);
       }
 
-      // Sync with server (throttling handled by React update batching or socket implementation)
-      // For smoothness, we usually emit less frequently, but for this demo, direct emit is easiest.
-      // Better: Emit in a setInterval outside, but here is fine for prototype.
       onMove(pos.current, rotation.current);
     }
   });
@@ -146,23 +139,26 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
       <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
       <Environment preset="sunset" />
 
-      <MapModel />
+      {/* Suspense is REQUIRED for useGLTF to work without crashing or black screening initially */}
+      <Suspense fallback={<Loader />}>
+          <MapModel />
 
-      {/* Render Other Players */}
-      {Object.values(players).map((p) => {
-        if (p.id === myId) return null; // Don't render self from server state (latency)
-        return <PlayerModel key={p.id} position={p.position} rotation={p.rotation} color={p.color} />;
-      })}
+          {/* Render Other Players */}
+          {Object.values(players).map((p) => {
+            if (p.id === myId) return null;
+            return <PlayerModel key={p.id} position={p.position} rotation={p.rotation} color={p.color} />;
+          })}
 
-      {/* Render Self with Client Prediction/Control */}
-      {myId && players[myId] && (
-        <PlayerController 
-            joystickData={joystickData} 
-            cameraRotation={cameraRotation} 
-            onMove={handlePlayerMove}
-            initialPos={players[myId].position}
-        />
-      )}
+          {/* Render Self */}
+          {myId && players[myId] && (
+            <PlayerController 
+                joystickData={joystickData} 
+                cameraRotation={cameraRotation} 
+                onMove={handlePlayerMove}
+                initialPos={players[myId].position}
+            />
+          )}
+      </Suspense>
     </Canvas>
   );
 };
