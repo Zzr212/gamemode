@@ -8,6 +8,7 @@ export interface PlayerState {
   id: string;
   position: Vector3;
   rotation: number; // Y-axis rotation in radians
+  animation: string; // 'idle' | 'walk'
   color: string; // Helper for visual distinction if model fails
 }
 
@@ -19,7 +20,7 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  move: (position: Vector3, rotation: number) => void;
+  move: (position: Vector3, rotation: number, animation: string) => void;
 }
 
 export interface JoystickData {

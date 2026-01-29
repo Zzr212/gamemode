@@ -1,11 +1,17 @@
 import React, { useRef, Suspense } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { Environment, PerspectiveCamera, Stars, Html, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
+
+declare global {
+  namespace JSX {
+    interface IntrinsicElements extends ThreeElements {}
+  }
+}
 
 interface GameSceneProps {
   joystickData: React.MutableRefObject<JoystickData>;
@@ -76,17 +82,22 @@ const CameraController: React.FC<{
 const PlayerController: React.FC<{
   joystickData: React.MutableRefObject<JoystickData>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
-  onMove: (pos: Vector3, rot: number) => void;
+  onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
 }> = ({ joystickData, cameraRotation, onMove, initialPos }) => {
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
+  const animationState = useRef('idle');
   const speed = 0.15;
 
   useFrame(() => {
     const { x, y } = joystickData.current;
     
-    if (Math.abs(x) > 0.05 || Math.abs(y) > 0.05) {
+    // Determine movement
+    const isMoving = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
+    const newAnim = isMoving ? 'walk' : 'idle';
+
+    if (isMoving) {
       const camYaw = cameraRotation.current.yaw;
       
       const forward = -y;
@@ -107,14 +118,23 @@ const PlayerController: React.FC<{
       if (moveX !== 0 || moveZ !== 0) {
         rotation.current = Math.atan2(moveX, moveZ);
       }
+    }
 
-      onMove(pos.current, rotation.current);
+    // Emit if position moved OR animation state changed
+    if (isMoving || animationState.current !== newAnim) {
+        animationState.current = newAnim;
+        onMove(pos.current, rotation.current, animationState.current);
     }
   });
 
   return (
     <>
-      <PlayerModel position={pos.current} rotation={rotation.current} isSelf />
+      <PlayerModel 
+        position={pos.current} 
+        rotation={rotation.current} 
+        animation={animationState.current}
+        isSelf 
+      />
       <CameraController targetPosition={pos.current} cameraRotation={cameraRotation} />
     </>
   );
@@ -122,8 +142,8 @@ const PlayerController: React.FC<{
 
 export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, players, myId }) => {
   
-  const handlePlayerMove = (pos: Vector3, rot: number) => {
-    socket.emit('move', pos, rot);
+  const handlePlayerMove = (pos: Vector3, rot: number, anim: string) => {
+    socket.emit('move', pos, rot, anim);
   };
 
   return (
@@ -146,7 +166,15 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           {/* Render Other Players */}
           {Object.values(players).map((p) => {
             if (p.id === myId) return null;
-            return <PlayerModel key={p.id} position={p.position} rotation={p.rotation} color={p.color} />;
+            return (
+                <PlayerModel 
+                    key={p.id} 
+                    position={p.position} 
+                    rotation={p.rotation} 
+                    color={p.color} 
+                    animation={p.animation}
+                />
+            );
           })}
 
           {/* Render Self */}

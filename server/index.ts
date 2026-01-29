@@ -31,6 +31,7 @@ io.on('connection', (socket) => {
     id: socket.id,
     position: { x: 0, y: 0, z: 0 },
     rotation: 0,
+    animation: 'idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
   };
 
@@ -40,10 +41,11 @@ io.on('connection', (socket) => {
   // Broadcast new player to others
   socket.broadcast.emit('newPlayer', players[socket.id]);
 
-  socket.on('move', (position, rotation) => {
+  socket.on('move', (position, rotation, animation) => {
     if (players[socket.id]) {
       players[socket.id].position = position;
       players[socket.id].rotation = rotation;
+      players[socket.id].animation = animation;
       socket.broadcast.emit('playerMoved', players[socket.id]);
     }
   });
@@ -61,12 +63,15 @@ io.on('connection', (socket) => {
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
 
-app.use('/', express.static(distPath));
+// Explicitly serve static files from dist
+app.use(express.static(distPath));
 
-// EMERGENCY FIX: Serve .glb models from root if not found in dist
-// This handles cases where user uploads assets to root instead of public/ folder
+// EMERGENCY FIX: Explicitly serve .glb files from the ROOT directory
+// This fixes the issue where assets are not found because they aren't in 'dist'
 app.get('/*.glb', (req, res) => {
-    const filePath = path.join(rootPath, req.path);
+    const filename = req.path; // e.g. /character.glb
+    const filePath = path.join(rootPath, filename);
+    console.log(`Serving GLB from: ${filePath}`); // Debug log
     res.sendFile(filePath);
 });
 
