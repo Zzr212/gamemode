@@ -19,6 +19,23 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
+// --- CONFIGURATION ---
+// Add safe spawn coordinates (x, y, z) here based on your map layout
+const SPAWN_POINTS = [
+    { x: 0, y: 5, z: 0 },    // Center (high up to drop down safely)
+    { x: 5, y: 5, z: 5 },
+    { x: -5, y: 5, z: -5 },
+    { x: 10, y: 5, z: 0 },
+    { x: 0, y: 5, z: 10 }
+];
+
+function getRandomSpawn() {
+    const randomIndex = Math.floor(Math.random() * SPAWN_POINTS.length);
+    const spawn = SPAWN_POINTS[randomIndex];
+    // Return a copy to avoid modifying the const
+    return { ...spawn };
+}
+
 // State
 const players: Record<string, PlayerState> = {};
 
@@ -26,10 +43,12 @@ const players: Record<string, PlayerState> = {};
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Create new player at spawn (0, 0, 0)
+  // Pick a random spawn point
+  const spawnPos = getRandomSpawn();
+
   players[socket.id] = {
     id: socket.id,
-    position: { x: 0, y: 0, z: 0 },
+    position: spawnPos,
     rotation: 0,
     animation: 'idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
@@ -58,17 +77,12 @@ io.on('connection', (socket) => {
 });
 
 // Serve Static Files
-// 1. Production: Serve from 'dist' (where Vite builds to)
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-app.use(express.static(distPath));
+app.use('/', express.static(distPath));
 
-// 2. Fallback/Dev: Serve from 'public' folder directly. 
-// This ensures /models/character.glb works even if not fully built or copied to dist yet.
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
-app.use(express.static(path.join(rootPath, 'public')));
+app.use('/', express.static(path.join(rootPath, 'public')));
 
-// Handle client-side routing by returning index.html for all other routes
-// Fixed: Changed 'req' to '_req' to satisfy TypeScript unused variable check
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });

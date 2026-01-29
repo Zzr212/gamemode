@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { ThreeElements } from '@react-three/fiber';
+import * as THREE from 'three';
 
 declare global {
   namespace JSX {
@@ -9,41 +10,33 @@ declare global {
 }
 
 export const MapModel: React.FC = () => {
-  // Direct load without aggressive try-catch
-  // If map.glb is missing, onError will trigger but not crash the app
-  const gltf = useGLTF('/models/map.glb', undefined, undefined, (loader) => {
-     loader.manager.onError = (url) => console.warn(`Failed to load map: ${url}`);
-  }) as any;
+  // Simple loading. Suspense in GameScene will handle the waiting time.
+  const gltf = useGLTF('/models/map.glb') as any;
+  const scene = gltf.scene;
 
-  const scene = gltf?.scene;
+  useEffect(() => {
+    if (scene) {
+        // Optimization: Traverse the map to enable shadows and identify it for physics
+        scene.traverse((child: any) => {
+            if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                // Important: Ensure material is compatible with lighting
+                if (child.material) {
+                    child.material.side = THREE.DoubleSide; 
+                }
+            }
+        });
+    }
+  }, [scene]);
 
   return (
-    <group>
-      {scene ? (
-        <primitive object={scene} />
-      ) : (
-        // Fallback map if loading fails
-        <group>
-            {/* Ground */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-            <planeGeometry args={[100, 100]} />
-            <meshStandardMaterial color="#333" />
-            </mesh>
-            {/* Grid helper for scale reference */}
-            <gridHelper args={[100, 100]} />
-            {/* Some obstacles */}
-            <mesh position={[5, 1, 5]}>
-                <boxGeometry args={[2, 2, 2]} />
-                <meshStandardMaterial color="gray" />
-            </mesh>
-            <mesh position={[-5, 2, -5]}>
-                <cylinderGeometry args={[1, 1, 4]} />
-                <meshStandardMaterial color="gray" />
-            </mesh>
-        </group>
-      )}
+    // We name this group 'ground-collider' so the PlayerController can find it to check for gravity
+    <group name="ground-collider">
+      <primitive object={scene} />
     </group>
   );
 };
-// Preload
+
+// Preload to start downloading immediately
 useGLTF.preload('/models/map.glb');
