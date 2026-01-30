@@ -90,8 +90,13 @@ const PlayerController: React.FC<{
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
   const velocity = useRef(new THREE.Vector3(0, 0, 0));
-  const animationState = useRef('Idle');
   const isGrounded = useRef(false);
+  
+  // Animation State Management
+  // animationRef is for logic checks inside useFrame (instant access)
+  const animationRef = useRef('Idle');
+  // visualAnimation is for React render cycle (triggers prop update on child)
+  const [visualAnimation, setVisualAnimation] = useState('Idle');
   
   // Raycaster
   const downRaycaster = useRef(new THREE.Raycaster());
@@ -206,16 +211,22 @@ const PlayerController: React.FC<{
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // 5. Animation
-    // Use Capitalized names to match GLTF common standards and PlayerModel logic
+    // 5. Animation Calculation
     let newAnim = 'Idle';
     if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
     else if (isMoving) newAnim = 'Run';
 
-    // 6. Sync
-    if (animationState.current !== newAnim || (isMoving && Math.random() < 0.2)) {
-        animationState.current = newAnim;
-        onMove(pos.current, rotation.current, animationState.current);
+    // 6. State Sync & Network Logic
+    
+    // Check if animation changed locally
+    if (animationRef.current !== newAnim) {
+        animationRef.current = newAnim;
+        setVisualAnimation(newAnim); // Force React Re-render so PlayerModel gets new prop!
+        onMove(pos.current, rotation.current, newAnim); // Send new animation immediately
+    } 
+    // If animation is same, but we are moving, sync position periodically (throttled)
+    else if (isMoving && Math.random() < 0.1) {
+        onMove(pos.current, rotation.current, animationRef.current);
     }
   });
 
@@ -223,7 +234,8 @@ const PlayerController: React.FC<{
     <>
       <group ref={playerGroupRef} position={[initialPos.x, initialPos.y, initialPos.z]}>
           <group ref={modelRotationGroupRef}>
-             <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={animationState.current} />
+             {/* We pass visualAnimation (state) here, not the ref. This ensures re-render. */}
+             <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
           </group>
       </group>
       <CameraController targetGroup={playerGroupRef} cameraRotation={cameraRotation} />
