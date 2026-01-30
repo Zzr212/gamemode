@@ -1,21 +1,26 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useGraph } from '@react-three/fiber';
+import { useGraph, ThreeElements } from '@react-three/fiber';
 import { Vector3 } from '../types';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
-import { ThreeElements } from '@react-three/fiber';
 
 declare global {
   namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
+    interface IntrinsicElements extends ThreeElements {
+        group: any;
+        primitive: any;
+        mesh: any;
+        circleGeometry: any;
+        meshBasicMaterial: any;
+    }
   }
 }
 
 interface PlayerModelProps {
   position: Vector3;
   rotation: number;
-  animation?: string; // 'idle' | 'walk' | 'run' | 'jump'
+  animation?: string; // 'idle' | 'run' | 'jump'
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
@@ -46,32 +51,31 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
     if (actions) {
         const allActions = Object.keys(actions);
         
-        // DEBUG: Print animations to console so user can verify names
-        // Check your browser console to see what your model actually has!
-        // console.log("Available Animations:", allActions);
-
         // Helper: Case insensitive partial match
         const findAction = (query: string) => 
             allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
 
         // MAPPING
-        const jumpKey = findAction('jump');
-        
-        // Fix: Broaden search for run. Look for 'run', 'sprint', 'fast', or fallback to 'walk'.
-        const runKey = findAction('run') || findAction('sprint') || findAction('fast') || findAction('walk') || findAction('move');
-        
-        const idleKey = findAction('idle') || findAction('wait') || findAction('stand') || allActions[0];
+        // Fix 1: Explicitly check for "Run" as requested and ensure we use the string key
+        const runKey = (actions['Run'] ? 'Run' : null) || findAction('Run') || findAction('run') || findAction('sprint');
+        const jumpKey = (actions['Jump'] ? 'Jump' : null) || findAction('Jump') || findAction('jump');
+        // Default idle fallback
+        const idleKey = (actions['Idle'] ? 'Idle' : null) || findAction('Idle') || findAction('idle') || allActions[0];
 
         let targetKey = '';
 
         if (animation === 'jump' && jumpKey) {
             targetKey = jumpKey;
         } else if (animation === 'run') {
-            // Explicitly requested run
-            targetKey = runKey || idleKey || '';
+            targetKey = runKey || '';
         } else {
-            // Default to idle
             targetKey = idleKey || '';
+        }
+
+        // Final safety check if targetKey is actually in actions
+        // If not found, default to first available animation to prevent T-pose
+        if (!actions[targetKey] && allActions.length > 0) {
+            targetKey = allActions[0];
         }
 
         const currentAction = actions[targetKey];

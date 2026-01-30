@@ -3,11 +3,10 @@ import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
-import { MapEditor } from './components/MapEditor';
 import { connectSocket, disconnectSocket, socket } from './services/socketService';
 import { JoystickData, PlayerState } from './types';
 
-type AppState = 'MENU' | 'GAME' | 'EDITOR';
+type AppState = 'MENU' | 'GAME';
 
 function App() {
   const [appState, setAppState] = useState<AppState>('MENU');
@@ -22,8 +21,8 @@ function App() {
 
   // Handle Socket Connection based on App State
   useEffect(() => {
-    // Only connect socket when entering GAME or EDITOR
-    if (appState !== 'MENU') {
+    // Only connect socket when entering GAME
+    if (appState === 'GAME') {
         connectSocket();
 
         const onConnect = () => {
@@ -65,8 +64,6 @@ function App() {
           socket.off('newPlayer', onNewPlayer);
           socket.off('playerMoved', onPlayerMoved);
           socket.off('playerDisconnected', onPlayerDisconnected);
-          // Only disconnect if we are actually leaving to menu
-          // (Logic handled by the dependency change, but we want to be explicit)
         };
     } else {
         disconnectSocket();
@@ -88,6 +85,7 @@ function App() {
   const handleCameraRotate = (dx: number, dy: number) => {
     const sensitivity = 0.005;
     cameraRotationRef.current.yaw -= dx * sensitivity;
+    // Y-axis controls pitch (looking up/down)
     cameraRotationRef.current.pitch -= dy * sensitivity;
   };
 
@@ -102,13 +100,7 @@ function App() {
       {appState === 'MENU' && (
           <MainMenu 
             onPlay={() => setAppState('GAME')} 
-            onEditor={() => setAppState('EDITOR')} 
           />
-      )}
-
-      {/* --- EDITOR STATE --- */}
-      {appState === 'EDITOR' && (
-          <MapEditor onBack={() => setAppState('MENU')} />
       )}
 
       {/* --- GAME STATE --- */}
