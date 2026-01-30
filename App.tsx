@@ -6,7 +6,7 @@ import { MainMenu } from './components/MainMenu';
 import { connectSocket, disconnectSocket, socket } from './services/socketService';
 import { JoystickData, PlayerState } from './types';
 
-type AppState = 'MENU' | 'QUEUE' | 'GAME';
+type AppState = 'MENU' | 'GAME';
 
 function App() {
   const [appState, setAppState] = useState<AppState>('MENU');
@@ -14,39 +14,21 @@ function App() {
   const [myId, setMyId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [ping, setPing] = useState<number>(0);
-  
-  // Queue State
-  const [queuePosition, setQueuePosition] = useState<number | null>(null);
-  const [isLoginReady, setIsLoginReady] = useState(false);
 
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
   const jumpRef = useRef<boolean>(false);
 
-  // Connection & Game Loop Logic
+  // Handle Socket Connection based on App State
   useEffect(() => {
-    // We connect socket when entering QUEUE state
-    if (appState === 'QUEUE' || appState === 'GAME') {
+    // Only connect socket when entering GAME
+    if (appState === 'GAME') {
         connectSocket();
 
         const onConnect = () => {
-          console.log("Connected to server");
-        };
-
-        const onQueueUpdate = (pos: number) => {
-            setQueuePosition(pos);
-        };
-
-        const onLoginAllowed = () => {
-            setIsLoginReady(true);
-            setQueuePosition(null); // Clear queue number
-            
-            // Wait a moment for "Loading..." animation then spawn
-            setTimeout(() => {
-                socket.emit('spawn');
-                setAppState('GAME');
-            }, 1000);
+          console.log("Connected with ID:", socket.id);
+          setMyId(socket.id || null);
         };
 
         const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
@@ -55,11 +37,7 @@ function App() {
 
         const onNewPlayer = (player: PlayerState) => {
           setPlayers((prev) => ({ ...prev, [player.id]: player }));
-          if (player.id === socket.id) {
-              setMyId(player.id);
-          } else {
-              addNotification(`Player joined`);
-          }
+          addNotification(`Player joined`);
         };
 
         const onPlayerMoved = (player: PlayerState) => {
@@ -76,8 +54,6 @@ function App() {
         };
 
         socket.on('connect', onConnect);
-        socket.on('queueUpdate', onQueueUpdate);
-        socket.on('loginAllowed', onLoginAllowed);
         socket.on('currentPlayers', onCurrentPlayers);
         socket.on('newPlayer', onNewPlayer);
         socket.on('playerMoved', onPlayerMoved);
@@ -85,19 +61,15 @@ function App() {
 
         // Ping Loop
         const pingInterval = setInterval(() => {
-            if (appState === 'GAME') {
-                const start = Date.now();
-                socket.emit('pingSync', () => {
-                    const latency = Date.now() - start;
-                    setPing(latency);
-                });
-            }
+            const start = Date.now();
+            socket.emit('pingSync', () => {
+                const latency = Date.now() - start;
+                setPing(latency);
+            });
         }, 1000);
 
         return () => {
           socket.off('connect', onConnect);
-          socket.off('queueUpdate', onQueueUpdate);
-          socket.off('loginAllowed', onLoginAllowed);
           socket.off('currentPlayers', onCurrentPlayers);
           socket.off('newPlayer', onNewPlayer);
           socket.off('playerMoved', onPlayerMoved);
@@ -107,8 +79,6 @@ function App() {
     } else {
         disconnectSocket();
         setPlayers({});
-        setQueuePosition(null);
-        setIsLoginReady(false);
     }
   }, [appState]);
 
@@ -126,29 +96,25 @@ function App() {
   const handleCameraRotate = (dx: number, dy: number) => {
     const sensitivity = 0.005;
     cameraRotationRef.current.yaw -= dx * sensitivity;
+    
+    // Fix: Clamp pitch immediately to prevent it from drifting into infinity
+    // This fixes the issue where the camera gets "stuck" after looking too far up or down
     const currentPitch = cameraRotationRef.current.pitch;
     const newPitch = currentPitch - dy * sensitivity;
-    cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch));
+    cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch)); // Updated limits logic handled in GameScene mostly
   };
 
   const handleJump = () => {
     jumpRef.current = true;
   };
 
-  // Called when 3D Play Button is clicked
-  const handleStartQueue = () => {
-      setAppState('QUEUE');
-  };
-
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative select-none touch-none">
       
-      {/* --- MENU / QUEUE STATE --- */}
-      {(appState === 'MENU' || appState === 'QUEUE') && (
+      {/* --- MAIN MENU STATE --- */}
+      {appState === 'MENU' && (
           <MainMenu 
-            onStartQueue={handleStartQueue}
-            queuePosition={queuePosition}
-            isReady={isLoginReady}
+            onPlay={() => setAppState('GAME')} 
           />
       )}
 
@@ -172,8 +138,14 @@ function App() {
             {/* UI Layer */}
             <div className="absolute top-0 left-0 right-0 p-4 z-10 pointer-events-none flex justify-between items-start">
                 
-                {/* Left: Notifications (Exit Button Removed) */}
+                {/* Left: Notifications & Menu */}
                 <div className="flex flex-col gap-2 items-start">
+                    <button 
+                        className="pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs border border-red-400 hover:bg-red-500 mb-2"
+                        onClick={() => setAppState('MENU')}
+                    >
+                        Exit
+                    </button>
                     {notifications.map((msg, i) => (
                         <div key={i} className="bg-black/50 text-white px-3 py-1 rounded-md text-sm animate-fade-in-down">
                             {msg}
@@ -202,7 +174,7 @@ function App() {
                     {/* Look Area */}
                     <TouchLook onRotate={handleCameraRotate} />
                     
-                    {/* Jump Button */}
+                    {/* Jump Button - Anchored Bottom Right */}
                     <div className="absolute bottom-12 right-12 pointer-events-auto">
                         <button
                             onPointerDown={handleJump}

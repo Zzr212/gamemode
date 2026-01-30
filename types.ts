@@ -17,14 +17,9 @@ export interface ServerToClientEvents {
   newPlayer: (player: PlayerState) => void;
   playerMoved: (player: PlayerState) => void;
   playerDisconnected: (id: string) => void;
-  
-  // Queue System
-  queueUpdate: (position: number) => void;
-  loginAllowed: () => void;
 }
 
 export interface ClientToServerEvents {
-  spawn: () => void; // Request to actually spawn the character
   move: (position: Vector3, rotation: number, animation: string) => void;
   pingSync: (callback: () => void) => void;
 }
