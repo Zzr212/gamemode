@@ -37,11 +37,41 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => {
+    // FIX: Hide all weapons except one Rifle/Gun
+    // Common Synty/Asset pack issue where all props are enabled by default
+    let rifleFound = false;
+
     clone.traverse((object: any) => {
       if (object.isMesh) {
         object.castShadow = true;
         object.receiveShadow = true;
         object.frustumCulled = false; 
+        
+        const name = object.name.toLowerCase();
+        
+        // Keywords for items to hide
+        const unwanted = ['sword', 'shield', 'axe', 'shovel', 'pickaxe', 'pistol', 'bow', 'dagger', 'spear'];
+        // Keywords to keep (Prioritize Rifle)
+        const wanted = ['rifle', 'gun', 'ak', 'smg'];
+
+        // Logic: 
+        // 1. If it's a wanted weapon and we haven't found one yet -> Keep visible
+        // 2. If it's a wanted weapon but we already have one -> Hide
+        // 3. If it's an unwanted weapon -> Hide
+        
+        const isWanted = wanted.some(w => name.includes(w));
+        const isUnwanted = unwanted.some(u => name.includes(u));
+
+        if (isWanted) {
+            if (!rifleFound) {
+                object.visible = true;
+                rifleFound = true;
+            } else {
+                object.visible = false;
+            }
+        } else if (isUnwanted) {
+            object.visible = false;
+        }
       }
     });
   }, [clone]);

@@ -3,7 +3,7 @@ import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
-import { connectSocket, disconnectSocket, socket } from './services/socketService';
+import { connectSocket, socket } from './services/socketService';
 import { JoystickData, PlayerState } from './types';
 
 type AppState = 'MENU' | 'GAME';
@@ -14,73 +14,86 @@ function App() {
   const [myId, setMyId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [ping, setPing] = useState<number>(0);
+  
+  // Queue State
+  const [isInQueue, setIsInQueue] = useState(false);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
 
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
   const jumpRef = useRef<boolean>(false);
 
-  // Handle Socket Connection based on App State
+  // Initialize Socket on Mount
   useEffect(() => {
-    // Only connect socket when entering GAME
-    if (appState === 'GAME') {
-        connectSocket();
+    connectSocket();
 
-        const onConnect = () => {
-          console.log("Connected with ID:", socket.id);
-          setMyId(socket.id || null);
-        };
+    const onConnect = () => {
+        console.log("Connected to server");
+        setMyId(socket.id || null);
+    };
 
-        const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
-          setPlayers(serverPlayers);
-        };
+    const onQueueUpdate = (pos: number) => {
+        setQueuePosition(pos);
+    };
 
-        const onNewPlayer = (player: PlayerState) => {
-          setPlayers((prev) => ({ ...prev, [player.id]: player }));
-          addNotification(`Player joined`);
-        };
+    const onGrantEntry = () => {
+        setIsInQueue(false);
+        setAppState('GAME');
+        // Now requesting actual game spawn
+        socket.emit('requestGameStart' as any); // Custom event handled in new server logic
+    };
 
-        const onPlayerMoved = (player: PlayerState) => {
-          setPlayers((prev) => ({ ...prev, [player.id]: player }));
-        };
+    const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
+        setPlayers(serverPlayers);
+    };
 
-        const onPlayerDisconnected = (id: string) => {
-          setPlayers((prev) => {
-            const newPlayers = { ...prev };
-            delete newPlayers[id];
-            return newPlayers;
-          });
-          addNotification(`Player left`);
-        };
+    const onNewPlayer = (player: PlayerState) => {
+        setPlayers((prev) => ({ ...prev, [player.id]: player }));
+        if(appState === 'GAME') addNotification(`Player joined`);
+    };
 
-        socket.on('connect', onConnect);
-        socket.on('currentPlayers', onCurrentPlayers);
-        socket.on('newPlayer', onNewPlayer);
-        socket.on('playerMoved', onPlayerMoved);
-        socket.on('playerDisconnected', onPlayerDisconnected);
+    const onPlayerMoved = (player: PlayerState) => {
+        setPlayers((prev) => ({ ...prev, [player.id]: player }));
+    };
 
-        // Ping Loop
-        const pingInterval = setInterval(() => {
-            const start = Date.now();
-            socket.emit('pingSync', () => {
-                const latency = Date.now() - start;
-                setPing(latency);
-            });
-        }, 1000);
+    const onPlayerDisconnected = (id: string) => {
+        setPlayers((prev) => {
+        const newPlayers = { ...prev };
+        delete newPlayers[id];
+        return newPlayers;
+        });
+        if(appState === 'GAME') addNotification(`Player left`);
+    };
 
-        return () => {
-          socket.off('connect', onConnect);
-          socket.off('currentPlayers', onCurrentPlayers);
-          socket.off('newPlayer', onNewPlayer);
-          socket.off('playerMoved', onPlayerMoved);
-          socket.off('playerDisconnected', onPlayerDisconnected);
-          clearInterval(pingInterval);
-        };
-    } else {
-        disconnectSocket();
-        setPlayers({});
-    }
-  }, [appState]);
+    socket.on('connect', onConnect);
+    socket.on('queueUpdate', onQueueUpdate);
+    socket.on('grantEntry', onGrantEntry);
+    socket.on('currentPlayers', onCurrentPlayers);
+    socket.on('newPlayer', onNewPlayer);
+    socket.on('playerMoved', onPlayerMoved);
+    socket.on('playerDisconnected', onPlayerDisconnected);
+
+    // Ping Loop
+    const pingInterval = setInterval(() => {
+        const start = Date.now();
+        socket.emit('pingSync', () => {
+            const latency = Date.now() - start;
+            setPing(latency);
+        });
+    }, 1000);
+
+    return () => {
+        socket.off('connect', onConnect);
+        socket.off('queueUpdate', onQueueUpdate);
+        socket.off('grantEntry', onGrantEntry);
+        socket.off('currentPlayers', onCurrentPlayers);
+        socket.off('newPlayer', onNewPlayer);
+        socket.off('playerMoved', onPlayerMoved);
+        socket.off('playerDisconnected', onPlayerDisconnected);
+        clearInterval(pingInterval);
+    };
+  }, [appState]); // Depend on appState to ensure notifications logic works correct
 
   const addNotification = (msg: string) => {
     setNotifications(prev => [...prev.slice(-4), msg]); 
@@ -97,15 +110,18 @@ function App() {
     const sensitivity = 0.005;
     cameraRotationRef.current.yaw -= dx * sensitivity;
     
-    // Fix: Clamp pitch immediately to prevent it from drifting into infinity
-    // This fixes the issue where the camera gets "stuck" after looking too far up or down
     const currentPitch = cameraRotationRef.current.pitch;
     const newPitch = currentPitch - dy * sensitivity;
-    cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch)); // Updated limits logic handled in GameScene mostly
+    cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch)); 
   };
 
   const handleJump = () => {
     jumpRef.current = true;
+  };
+
+  const handleJoinQueue = () => {
+      setIsInQueue(true);
+      socket.emit('joinQueue');
   };
 
   return (
@@ -114,7 +130,9 @@ function App() {
       {/* --- MAIN MENU STATE --- */}
       {appState === 'MENU' && (
           <MainMenu 
-            onPlay={() => setAppState('GAME')} 
+            onPlay={handleJoinQueue}
+            isInQueue={isInQueue}
+            queuePosition={queuePosition}
           />
       )}
 
@@ -138,14 +156,8 @@ function App() {
             {/* UI Layer */}
             <div className="absolute top-0 left-0 right-0 p-4 z-10 pointer-events-none flex justify-between items-start">
                 
-                {/* Left: Notifications & Menu */}
+                {/* Left: Notifications (Exit Removed) */}
                 <div className="flex flex-col gap-2 items-start">
-                    <button 
-                        className="pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs border border-red-400 hover:bg-red-500 mb-2"
-                        onClick={() => setAppState('MENU')}
-                    >
-                        Exit
-                    </button>
                     {notifications.map((msg, i) => (
                         <div key={i} className="bg-black/50 text-white px-3 py-1 rounded-md text-sm animate-fade-in-down">
                             {msg}
