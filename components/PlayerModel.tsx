@@ -1,21 +1,9 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useGraph, ThreeElements } from '@react-three/fiber';
+import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
-
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {
-        group: any;
-        primitive: any;
-        mesh: any;
-        circleGeometry: any;
-        meshBasicMaterial: any;
-    }
-  }
-}
 
 interface PlayerModelProps {
   position: Vector3;

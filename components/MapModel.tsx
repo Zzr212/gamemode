@@ -1,13 +1,6 @@
 import React, { useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { ThreeElements } from '@react-three/fiber';
 import * as THREE from 'three';
-
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
-  }
-}
 
 export const MapModel: React.FC = () => {
   // Simple loading. Suspense in GameScene will handle the waiting time.

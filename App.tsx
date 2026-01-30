@@ -33,15 +33,22 @@ function App() {
         setMyId(socket.id || null);
     };
 
+    const onDisconnect = () => {
+        console.log("Disconnected from server");
+        // FIX: Reset queue state if connection drops
+        setIsInQueue(false);
+        setQueuePosition(null);
+    };
+
     const onQueueUpdate = (pos: number) => {
         setQueuePosition(pos);
     };
 
     const onGrantEntry = () => {
+        console.log("Access granted, entering game...");
         setIsInQueue(false);
         setAppState('GAME');
-        // Now requesting actual game spawn
-        socket.emit('requestGameStart' as any); // Custom event handled in new server logic
+        socket.emit('requestGameStart' as any); 
     };
 
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
@@ -67,6 +74,7 @@ function App() {
     };
 
     socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
     socket.on('queueUpdate', onQueueUpdate);
     socket.on('grantEntry', onGrantEntry);
     socket.on('currentPlayers', onCurrentPlayers);
@@ -85,6 +93,7 @@ function App() {
 
     return () => {
         socket.off('connect', onConnect);
+        socket.off('disconnect', onDisconnect);
         socket.off('queueUpdate', onQueueUpdate);
         socket.off('grantEntry', onGrantEntry);
         socket.off('currentPlayers', onCurrentPlayers);
@@ -121,7 +130,17 @@ function App() {
 
   const handleJoinQueue = () => {
       setIsInQueue(true);
-      socket.emit('joinQueue');
+      if (socket.connected) {
+          socket.emit('joinQueue');
+      } else {
+          // Try reconnecting if user clicks play while disconnected
+          connectSocket();
+          // Wait slightly for connection
+          setTimeout(() => {
+              if (socket.connected) socket.emit('joinQueue');
+              else setIsInQueue(false); // Fail gracefully
+          }, 500);
+      }
   };
 
   return (

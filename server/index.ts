@@ -25,31 +25,37 @@ let isProcessingQueue = false;
 
 // Queue Processor
 const processQueue = async () => {
+    // If already processing or nobody waiting, stop.
     if (isProcessingQueue || waitingQueue.length === 0) return;
 
     isProcessingQueue = true;
 
-    // Get first in line
-    const socketId = waitingQueue.shift();
+    try {
+        // Get first in line
+        const socketId = waitingQueue.shift();
 
-    if (socketId) {
-        // Notify user they can enter
-        io.to(socketId).emit('grantEntry');
+        if (socketId) {
+            console.log(`Granting entry to ${socketId}`);
+            // Notify user they can enter
+            io.to(socketId).emit('grantEntry');
+            
+            // Update positions for everyone else
+            waitingQueue.forEach((id, index) => {
+                io.to(id).emit('queueUpdate', index + 1);
+            });
+
+            // Reduced delay to 500ms for snappier entry
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    } catch (e) {
+        console.error("Error processing queue", e);
+    } finally {
+        isProcessingQueue = false;
         
-        // Update positions for everyone else
-        waitingQueue.forEach((id, index) => {
-            io.to(id).emit('queueUpdate', index + 1);
-        });
-
-        // Wait a bit before letting next person in to prevent spawn collisions/race conditions
-        await new Promise(resolve => setTimeout(resolve, 1500));
-    }
-
-    isProcessingQueue = false;
-    
-    // Keep processing if people are waiting
-    if (waitingQueue.length > 0) {
-        processQueue();
+        // Keep processing if people are waiting
+        if (waitingQueue.length > 0) {
+            processQueue();
+        }
     }
 };
 
@@ -61,7 +67,10 @@ io.on('connection', (socket) => {
   socket.on('joinQueue', () => {
      if (!waitingQueue.includes(socket.id)) {
          waitingQueue.push(socket.id);
+         console.log(`User ${socket.id} joined queue. Position: ${waitingQueue.length}`);
          socket.emit('queueUpdate', waitingQueue.length);
+         
+         // Trigger processing immediately
          processQueue();
      }
   });

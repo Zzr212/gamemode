@@ -1,22 +1,11 @@
 import React, { useRef, Suspense, Component, ReactNode, useState, useEffect, useCallback } from 'react';
-import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
-
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {
-        fog: any;
-        ambientLight: any;
-        directionalLight: any;
-        group: any;
-    }
-  }
-}
 
 // Error Boundary
 class ModelErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
