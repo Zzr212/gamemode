@@ -3,10 +3,11 @@ import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
+import { MapEditor } from './components/MapEditor';
 import { connectSocket, disconnectSocket, socket } from './services/socketService';
-import { JoystickData, PlayerState, Vector3 } from './types';
+import { JoystickData, PlayerState } from './types';
 
-type AppState = 'MENU' | 'GAME';
+type AppState = 'MENU' | 'GAME' | 'EDITOR';
 
 function App() {
   const [appState, setAppState] = useState<AppState>('MENU');
@@ -21,13 +22,17 @@ function App() {
 
   // Handle Socket Connection based on App State
   useEffect(() => {
-    if (appState === 'GAME') {
+    // Only connect socket when entering GAME or EDITOR
+    if (appState !== 'MENU') {
         connectSocket();
 
-        const onConnectionData = (data: { id: string, spawnPoint: Vector3, players: Record<string, PlayerState> }) => {
-            console.log("Joined Game:", data);
-            setMyId(data.id);
-            setPlayers(data.players);
+        const onConnect = () => {
+          console.log("Connected with ID:", socket.id);
+          setMyId(socket.id || null);
+        };
+
+        const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
+          setPlayers(serverPlayers);
         };
 
         const onNewPlayer = (player: PlayerState) => {
@@ -48,21 +53,24 @@ function App() {
           addNotification(`Player left`);
         };
 
-        socket.on('connectionData', onConnectionData);
+        socket.on('connect', onConnect);
+        socket.on('currentPlayers', onCurrentPlayers);
         socket.on('newPlayer', onNewPlayer);
         socket.on('playerMoved', onPlayerMoved);
         socket.on('playerDisconnected', onPlayerDisconnected);
 
         return () => {
-          socket.off('connectionData', onConnectionData);
+          socket.off('connect', onConnect);
+          socket.off('currentPlayers', onCurrentPlayers);
           socket.off('newPlayer', onNewPlayer);
           socket.off('playerMoved', onPlayerMoved);
           socket.off('playerDisconnected', onPlayerDisconnected);
+          // Only disconnect if we are actually leaving to menu
+          // (Logic handled by the dependency change, but we want to be explicit)
         };
     } else {
         disconnectSocket();
         setPlayers({});
-        setMyId(null);
     }
   }, [appState]);
 
@@ -94,7 +102,13 @@ function App() {
       {appState === 'MENU' && (
           <MainMenu 
             onPlay={() => setAppState('GAME')} 
+            onEditor={() => setAppState('EDITOR')} 
           />
+      )}
+
+      {/* --- EDITOR STATE --- */}
+      {appState === 'EDITOR' && (
+          <MapEditor onBack={() => setAppState('MENU')} />
       )}
 
       {/* --- GAME STATE --- */}

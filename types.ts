@@ -8,8 +8,8 @@ export interface PlayerState {
   id: string;
   position: Vector3;
   rotation: number; // Y-axis rotation in radians
-  animation: string; // 'idle' | 'walk' | 'run' | 'jump'
-  color: string; 
+  animation: string; // 'idle' | 'walk'
+  color: string; // Helper for visual distinction if model fails
 }
 
 export interface ServerToClientEvents {
@@ -17,12 +17,15 @@ export interface ServerToClientEvents {
   newPlayer: (player: PlayerState) => void;
   playerMoved: (player: PlayerState) => void;
   playerDisconnected: (id: string) => void;
-  // Sync event for immediate spawn
-  connectionData: (data: { id: string; spawnPoint: Vector3; players: Record<string, PlayerState> }) => void;
+  // Editor events
+  spawnPointUpdated: (pos: Vector3) => void;
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
+  // Editor events
+  updateSpawnPoint: (pos: Vector3) => void;
+  requestSpawnPoint: () => void;
 }
 
 export interface JoystickData {

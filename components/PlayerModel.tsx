@@ -1,30 +1,25 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useGraph, ThreeElements } from '@react-three/fiber';
+import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
-import { Group, LoopOnce, LoopRepeat, Mesh, CircleGeometry, MeshBasicMaterial } from 'three';
+import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
+import { ThreeElements } from '@react-three/fiber';
 
 declare global {
   namespace JSX {
-    interface IntrinsicElements extends ThreeElements {
-        group: any;
-        primitive: any;
-        mesh: any;
-        circleGeometry: any;
-        meshBasicMaterial: any;
-    }
+    interface IntrinsicElements extends ThreeElements {}
   }
 }
 
 interface PlayerModelProps {
   position: Vector3;
   rotation: number;
-  animation?: string; // 'idle' | 'run' | 'jump'
+  animation?: string; // 'idle' | 'walk' | 'run' | 'jump'
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
-  const group = useRef<Group>(null);
+  const group = useRef<THREE.Group>(null);
   const previousAction = useRef<string>('');
   
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
@@ -41,7 +36,6 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
       if (object.isMesh) {
         object.castShadow = true;
         object.receiveShadow = true;
-        // Optimization: Disable frustum culling for animated meshes to prevent flickering at edges
         object.frustumCulled = false; 
       }
     });
@@ -50,55 +44,57 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   // ANIMATION LOGIC
   useEffect(() => {
     if (actions) {
-        // EXACT NAMES FROM YOUR SCREENSHOT:
-        // "Run", "Idle", "Jump", "Walk"
+        const allActions = Object.keys(actions);
         
-        const actionNames = {
-            idle: 'Idle',
-            run: 'Run',
-            jump: 'Jump',
-            walk: 'Walk'
-        };
+        // DEBUG: Print animations to console so user can verify names
+        // Check your browser console to see what your model actually has!
+        // console.log("Available Animations:", allActions);
 
-        // Determine which animation to play based on prop
-        let targetName = actionNames.idle; // Default
+        // Helper: Case insensitive partial match
+        const findAction = (query: string) => 
+            allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
 
-        if (animation === 'run') {
-            targetName = actionNames.run;
-        } else if (animation === 'jump') {
-            targetName = actionNames.jump;
-        } else if (animation === 'walk') {
-            targetName = actionNames.walk;
+        // MAPPING
+        const jumpKey = findAction('jump');
+        
+        // Fix: Broaden search for run. Look for 'run', 'sprint', 'fast', or fallback to 'walk'.
+        const runKey = findAction('run') || findAction('sprint') || findAction('fast') || findAction('walk') || findAction('move');
+        
+        const idleKey = findAction('idle') || findAction('wait') || findAction('stand') || allActions[0];
+
+        let targetKey = '';
+
+        if (animation === 'jump' && jumpKey) {
+            targetKey = jumpKey;
+        } else if (animation === 'run') {
+            // Explicitly requested run
+            targetKey = runKey || idleKey || '';
+        } else {
+            // Default to idle
+            targetKey = idleKey || '';
         }
 
-        // Fallback checks if exact name doesn't exist (safety)
-        if (!actions[targetName]) {
-             // Try case-insensitive search if "Run" isn't found
-             const found = Object.keys(actions).find(key => key.toLowerCase() === animation.toLowerCase());
-             if (found) targetName = found;
-        }
-
-        const currentAction = actions[targetName];
+        const currentAction = actions[targetKey];
         
-        if (currentAction && (targetName !== previousAction.current || animation === 'jump')) {
+        if (currentAction && (targetKey !== previousAction.current || animation === 'jump')) {
             
-            // Fade out all other actions
-            Object.values(actions).forEach((action: any) => {
-                if (action !== currentAction) {
-                    action.fadeOut(0.2);
+            // Fade out others
+            allActions.forEach(key => {
+                if (key !== targetKey && actions[key]) {
+                    actions[key]?.fadeOut(0.2);
                 }
             });
 
             currentAction.reset().fadeIn(0.2).play();
 
             if (animation === 'jump') {
-                currentAction.setLoop(LoopOnce, 1);
+                currentAction.setLoop(THREE.LoopOnce, 1);
                 currentAction.clampWhenFinished = true;
             } else {
-                currentAction.setLoop(LoopRepeat, Infinity);
+                currentAction.setLoop(THREE.LoopRepeat, Infinity);
             }
 
-            previousAction.current = targetName;
+            previousAction.current = targetKey;
         }
     }
   }, [animation, actions]);
@@ -106,10 +102,9 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   return (
     <group ref={group} position={[position.x, position.y, position.z]} rotation={[0, rotation, 0]}>
       <primitive object={clone} scale={1} />
-      {/* Shadow Blob for weak devices instead of real shadow if needed */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
-        <circleGeometry args={[0.5, 16]} />
-        <meshBasicMaterial color="#000000" opacity={0.3} transparent depthWrite={false} />
+        <circleGeometry args={[0.5, 32]} />
+        <meshBasicMaterial color="#000000" opacity={0.4} transparent />
       </mesh>
     </group>
   );
