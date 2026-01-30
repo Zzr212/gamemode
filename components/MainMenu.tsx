@@ -29,7 +29,6 @@ interface MainMenuProps {
 const Snow: React.FC = () => {
     const count = 400;
     const mesh = useRef<THREE.InstancedMesh>(null);
-    const lightRef = useRef<THREE.PointLight>(null);
     
     const particles = useMemo(() => {
         const temp = [];
