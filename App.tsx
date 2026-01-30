@@ -13,6 +13,7 @@ function App() {
   const [players, setPlayers] = useState<Record<string, PlayerState>>({});
   const [myId, setMyId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<string[]>([]);
+  const [ping, setPing] = useState<number>(0);
 
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
@@ -58,12 +59,22 @@ function App() {
         socket.on('playerMoved', onPlayerMoved);
         socket.on('playerDisconnected', onPlayerDisconnected);
 
+        // Ping Loop
+        const pingInterval = setInterval(() => {
+            const start = Date.now();
+            socket.emit('pingSync', () => {
+                const latency = Date.now() - start;
+                setPing(latency);
+            });
+        }, 1000);
+
         return () => {
           socket.off('connect', onConnect);
           socket.off('currentPlayers', onCurrentPlayers);
           socket.off('newPlayer', onNewPlayer);
           socket.off('playerMoved', onPlayerMoved);
           socket.off('playerDisconnected', onPlayerDisconnected);
+          clearInterval(pingInterval);
         };
     } else {
         disconnectSocket();
@@ -90,7 +101,7 @@ function App() {
     // This fixes the issue where the camera gets "stuck" after looking too far up or down
     const currentPitch = cameraRotationRef.current.pitch;
     const newPitch = currentPitch - dy * sensitivity;
-    cameraRotationRef.current.pitch = Math.max(-0.5, Math.min(1.5, newPitch));
+    cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch)); // Updated limits logic handled in GameScene mostly
   };
 
   const handleJump = () => {
@@ -121,21 +132,32 @@ function App() {
                 />
             </div>
 
+            {/* Crosshair */}
+            <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-white rounded-full -translate-x-1/2 -translate-y-1/2 shadow-[0_0_2px_rgba(0,0,0,0.8)] z-10 pointer-events-none opacity-80" />
+
             {/* UI Layer */}
-            <div className="absolute top-0 left-0 p-4 z-10 pointer-events-none">
-                <div className="flex flex-col gap-2">
+            <div className="absolute top-0 left-0 right-0 p-4 z-10 pointer-events-none flex justify-between items-start">
+                
+                {/* Left: Notifications & Menu */}
+                <div className="flex flex-col gap-2 items-start">
+                    <button 
+                        className="pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs border border-red-400 hover:bg-red-500 mb-2"
+                        onClick={() => setAppState('MENU')}
+                    >
+                        Exit
+                    </button>
                     {notifications.map((msg, i) => (
                         <div key={i} className="bg-black/50 text-white px-3 py-1 rounded-md text-sm animate-fade-in-down">
                             {msg}
                         </div>
                     ))}
                 </div>
-                <button 
-                    className="mt-4 pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs border border-red-400 hover:bg-red-500"
-                    onClick={() => setAppState('MENU')}
-                >
-                    Exit
-                </button>
+
+                {/* Right: Ping Indicator */}
+                <div className="flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm">
+                    <div className={`w-2 h-2 rounded-full ${ping < 100 ? 'bg-green-500' : ping < 200 ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+                    <span className="text-white text-xs font-mono">{ping} ms</span>
+                </div>
             </div>
 
             {/* Controls Layer */}

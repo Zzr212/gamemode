@@ -26,9 +26,7 @@ io.on('connection', (socket) => {
 
   socket.emit('currentPlayers', players);
 
-  // Fix 2: Random Spawning Logic
-  // Spawns player within a range of +/- 20 units on X and Z
-  // Y is set to 5 to ensure they drop onto the map (gravity will handle the rest)
+  // Random Spawning Logic
   const randomX = (Math.random() - 0.5) * 40; 
   const randomZ = (Math.random() - 0.5) * 40;
 
@@ -53,6 +51,11 @@ io.on('connection', (socket) => {
       players[socket.id].animation = animation;
       socket.broadcast.emit('playerMoved', players[socket.id]);
     }
+  });
+
+  // Ping listener for latency check
+  socket.on('pingSync', (callback) => {
+    callback(); // Acknowledge immediately
   });
 
   socket.on('disconnect', () => {

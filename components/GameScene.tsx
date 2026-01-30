@@ -1,4 +1,4 @@
-import React, { useRef, Suspense, Component, ReactNode, useState } from 'react';
+import React, { useRef, Suspense, Component, ReactNode, useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
@@ -36,42 +36,46 @@ interface GameSceneProps {
   myId: string | null;
 }
 
-// --- REMOTE PLAYER COMPONENT (Interpolation Logic) ---
-// This handles smoothing out the movement of other players so they don't teleport.
+// --- REMOTE PLAYER COMPONENT ---
 const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   const groupRef = useRef<THREE.Group>(null);
   
-  // We keep a reference to the current animation to avoid passing unstable props
-  // However, we pass data.animation directly to PlayerModel which handles the blending.
-  
+  // Set initial position once
+  useEffect(() => {
+    if (groupRef.current) {
+        groupRef.current.position.set(data.position.x, data.position.y, data.position.z);
+    }
+  }, []); // Only on mount
+
   useFrame((_, delta) => {
     if (groupRef.current) {
       // 1. Position Interpolation (Lerp)
-      // Smoothly move from current position to target position (data.position)
-      // Factor 10 * delta gives a quick but smooth catch-up
+      // IMPORTANT: We use the ref for position to allow smooth interpolation.
+      // If we controlled the 'position' prop in the JSX, React would overwrite 
+      // our smooth movement every time 'data' changed from the server.
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
-      groupRef.current.position.lerp(targetPos, 12 * delta);
+      
+      // Dynamic lerp factor: move faster if far away (teleport prevention)
+      const distance = groupRef.current.position.distanceTo(targetPos);
+      const lerpFactor = distance > 2 ? 0.5 : 10 * delta; // Snap if too far, smooth if close
+      
+      groupRef.current.position.lerp(targetPos, lerpFactor);
 
       // 2. Rotation Interpolation
-      // Smoothly rotate towards target rotation
       let currentRot = groupRef.current.rotation.y;
       let targetRot = data.rotation;
       
-      // Shortest path rotation logic
       let diff = targetRot - currentRot;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       
-      groupRef.current.rotation.y += diff * 10 * delta;
+      groupRef.current.rotation.y += diff * 12 * delta;
     }
   });
 
   return (
-    <group ref={groupRef} position={[data.position.x, data.position.y, data.position.z]}>
-      {/* 
-         We render PlayerModel at 0,0,0 inside this interpolated group. 
-         We pass the animation state directly from the server data.
-      */}
+    // DO NOT pass position={[...]} here, it causes the teleport/stutter bug!
+    <group ref={groupRef}>
       <PlayerModel 
         position={{x:0, y:0, z:0}} 
         rotation={0} 
@@ -93,25 +97,46 @@ const CameraController: React.FC<{
     if (!targetGroup.current) return;
 
     const targetPosition = targetGroup.current.position;
-    const distance = 8;
-    const height = 4;
+    
+    // CAMERA SETTINGS
+    const distance = 7; // Distance from player
+    const height = 3;   // Height offset relative to player
+    const shoulderOffset = 2.0; // Positive = Camera moves Right (Player looks Left)
 
+    // Yaw: Rotation around Y (Left/Right)
     const yaw = cameraRotation.current.yaw;
-    const pitch = Math.max(-0.5, Math.min(1.5, cameraRotation.current.pitch));
+    // Pitch: Rotation Up/Down. 
+    // Increased lower limit to -1.2 to allow looking UP more.
+    const pitch = Math.max(-1.2, Math.min(1.5, cameraRotation.current.pitch));
 
+    // Spherical coordinates calculation
     const hDist = distance * Math.cos(pitch);
     const vDist = distance * Math.sin(pitch);
 
-    const offsetX = Math.sin(yaw) * hDist;
-    const offsetZ = Math.cos(yaw) * hDist;
+    // Standard orbit position (behind player)
+    const orbitX = Math.sin(yaw) * hDist;
+    const orbitZ = Math.cos(yaw) * hDist;
+
+    // Shoulder Offset Vector (Perpendicular to look direction)
+    // If LookDir is (sin(yaw), cos(yaw)), Right Vector is (cos(yaw), -sin(yaw))
+    const offsetX = Math.cos(yaw) * shoulderOffset;
+    const offsetZ = -Math.sin(yaw) * shoulderOffset;
+
+    // Calculate Target Camera Position
+    const finalCamX = targetPosition.x + orbitX + offsetX;
+    const finalCamZ = targetPosition.z + orbitZ + offsetZ;
+    
+    // Calculate Height
+    let finalCamY = targetPosition.y + height + vDist;
+    
+    // FLOOR CLAMP: Prevent camera from going underground
+    // Assuming floor is around 0. We clamp to 0.5 to keep it slightly above.
+    finalCamY = Math.max(0.5, finalCamY);
 
     const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
     
-    currentPos.current.lerp(new THREE.Vector3(
-        targetVec.x + offsetX, 
-        targetVec.y + height + vDist, 
-        targetVec.z + offsetZ
-    ), 0.15);
+    // Smooth Camera Movement
+    currentPos.current.lerp(new THREE.Vector3(finalCamX, finalCamY, finalCamZ), 0.2);
 
     camera.position.copy(currentPos.current);
     camera.lookAt(targetVec);
@@ -287,12 +312,9 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
         <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={100} onUpdate={c => c.lookAt(0, 0, 0)}/>
 
-        {/* 4. Visuals: Day & Fog */}
-        {/* White fog for distance, matches sky */}
         <fog attach="fog" args={['#eefbff', 20, 80]} />
         <color attach="background" args={['#eefbff']} />
 
-        {/* Daylight Lighting */}
         <ambientLight intensity={0.6} />
         <directionalLight 
           position={[50, 80, 30]} 
@@ -302,7 +324,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           shadow-bias={-0.0001}
         />
 
-        {/* Sky with Clouds (Day effect) */}
         <Sky 
             sunPosition={[100, 20, 100]} 
             turbidity={0.5} 
@@ -315,7 +336,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           <ModelErrorBoundary>
             <MapModel />
 
-            {/* Render Other Players using RemotePlayer for interpolation */}
+            {/* Render Other Players */}
             {Object.values(players).map((p) => {
               if (p.id === myId) return null;
               return <RemotePlayer key={p.id} data={p} />;
