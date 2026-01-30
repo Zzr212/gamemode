@@ -19,6 +19,11 @@ const EditorScene: React.FC<{
   // Initialize with savedPos
   const [localPos, setLocalPos] = useState(savedPos);
 
+  // Sync local state if savedPos updates from outside
+  useEffect(() => {
+    setLocalPos(savedPos);
+  }, [savedPos]);
+
   const handleTransformChange = () => {
     if (meshRef.current) {
         const { x, y, z } = meshRef.current.position;
@@ -42,7 +47,8 @@ const EditorScene: React.FC<{
           mode="translate" 
           onObjectChange={handleTransformChange}
       >
-          <mesh ref={meshRef} position={[savedPos.x, savedPos.y, savedPos.z]}>
+          {/* Use localPos here to fix unused variable error and ensure smooth dragging */}
+          <mesh ref={meshRef} position={[localPos.x, localPos.y, localPos.z]}>
               {/* Hologram Base */}
               <boxGeometry args={[1, 0.2, 1]} />
               <meshBasicMaterial color="#00ff00" wireframe opacity={0.5} transparent depthTest={false} />

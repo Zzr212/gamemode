@@ -56,7 +56,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
         const jumpKey = findAction('jump');
         // 2. Run / Walk (Prioritize Run if requested, but fallback to walk)
         const runKey = findAction('run') || findAction('sprint') || findAction('walk');
-        const walkKey = findAction('walk') || findAction('run');
+        
         // 3. Idle
         const idleKey = findAction('idle') || findAction('wait') || findAction('breath') || allActions[0];
 

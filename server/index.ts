@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { PlayerState, Vector3 } from '../types.js';
 
@@ -19,10 +20,34 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
-// --- CONFIGURATION ---
-// Default spawn point (editable via Map Editor)
-// Stores in memory (will reset on server restart)
+// --- CONFIGURATION & PERSISTENCE ---
+const DATA_FILE = path.join(__dirname, 'spawn_config.json');
+
+// Default spawn point
 let globalSpawnPoint: Vector3 = { x: 0, y: 5, z: 0 };
+
+// 1. Load Spawn Point from Disk on Startup
+try {
+    if (fs.existsSync(DATA_FILE)) {
+        const rawData = fs.readFileSync(DATA_FILE, 'utf-8');
+        globalSpawnPoint = JSON.parse(rawData);
+        console.log('Loaded spawn point from disk:', globalSpawnPoint);
+    } else {
+        console.log('No spawn config found, using default:', globalSpawnPoint);
+    }
+} catch (error) {
+    console.error('Error loading spawn config:', error);
+}
+
+// Helper to save to disk
+const saveSpawnPointToDisk = (pos: Vector3) => {
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(pos, null, 2));
+        console.log('Spawn point saved to disk.');
+    } catch (error) {
+        console.error('Error saving spawn config:', error);
+    }
+};
 
 // State
 const players: Record<string, PlayerState> = {};
@@ -32,14 +57,13 @@ io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
   // 1. Initial Data Handshake
-  // Send the current spawn point immediately so Editor/Game knows where to start
+  // Send the current spawn point immediately (loaded from file or memory)
   socket.emit('spawnPointUpdated', globalSpawnPoint);
   
   // Send current players to new joiner
   socket.emit('currentPlayers', players);
 
   // 2. Spawn Logic
-  // Use the global spawn point with a tiny random offset
   const spawnOffset = {
       x: (Math.random() - 0.5) * 2,
       z: (Math.random() - 0.5) * 2
@@ -72,9 +96,13 @@ io.on('connection', (socket) => {
   // EDITOR: Update global spawn point
   socket.on('updateSpawnPoint', (pos: Vector3) => {
       globalSpawnPoint = pos;
+      
+      // Save to disk immediately
+      saveSpawnPointToDisk(globalSpawnPoint);
+
       // Broadcast to all editors/clients so they update in real-time
       io.emit('spawnPointUpdated', globalSpawnPoint);
-      console.log('New Spawn Point Set:', globalSpawnPoint);
+      console.log('New Spawn Point Set & Saved:', globalSpawnPoint);
   });
   
   // Explicit request from client (Editor)
