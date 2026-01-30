@@ -44,7 +44,7 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   // We keep a reference to the current animation to avoid passing unstable props
   // However, we pass data.animation directly to PlayerModel which handles the blending.
   
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (groupRef.current) {
       // 1. Position Interpolation (Lerp)
       // Smoothly move from current position to target position (data.position)
