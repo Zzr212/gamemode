@@ -14,10 +14,6 @@ function App() {
   const [myId, setMyId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [ping, setPing] = useState<number>(0);
-  
-  // Queue State
-  const [isInQueue, setIsInQueue] = useState(false);
-  const [queuePosition, setQueuePosition] = useState<number | null>(null);
 
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
@@ -31,24 +27,6 @@ function App() {
     const onConnect = () => {
         console.log("Connected to server");
         setMyId(socket.id || null);
-    };
-
-    const onDisconnect = () => {
-        console.log("Disconnected from server");
-        // FIX: Reset queue state if connection drops
-        setIsInQueue(false);
-        setQueuePosition(null);
-    };
-
-    const onQueueUpdate = (pos: number) => {
-        setQueuePosition(pos);
-    };
-
-    const onGrantEntry = () => {
-        console.log("Access granted, entering game...");
-        setIsInQueue(false);
-        setAppState('GAME');
-        socket.emit('requestGameStart' as any); 
     };
 
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => {
@@ -74,9 +52,6 @@ function App() {
     };
 
     socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('queueUpdate', onQueueUpdate);
-    socket.on('grantEntry', onGrantEntry);
     socket.on('currentPlayers', onCurrentPlayers);
     socket.on('newPlayer', onNewPlayer);
     socket.on('playerMoved', onPlayerMoved);
@@ -93,9 +68,6 @@ function App() {
 
     return () => {
         socket.off('connect', onConnect);
-        socket.off('disconnect', onDisconnect);
-        socket.off('queueUpdate', onQueueUpdate);
-        socket.off('grantEntry', onGrantEntry);
         socket.off('currentPlayers', onCurrentPlayers);
         socket.off('newPlayer', onNewPlayer);
         socket.off('playerMoved', onPlayerMoved);
@@ -128,19 +100,12 @@ function App() {
     jumpRef.current = true;
   };
 
-  const handleJoinQueue = () => {
-      setIsInQueue(true);
-      if (socket.connected) {
-          socket.emit('joinQueue');
-      } else {
-          // Try reconnecting if user clicks play while disconnected
-          connectSocket();
-          // Wait slightly for connection
-          setTimeout(() => {
-              if (socket.connected) socket.emit('joinQueue');
-              else setIsInQueue(false); // Fail gracefully
-          }, 500);
-      }
+  const handlePlayGame = () => {
+      // Immediate Game Entry
+      if (!socket.connected) connectSocket();
+      
+      setAppState('GAME');
+      socket.emit('requestGameStart');
   };
 
   return (
@@ -149,9 +114,7 @@ function App() {
       {/* --- MAIN MENU STATE --- */}
       {appState === 'MENU' && (
           <MainMenu 
-            onPlay={handleJoinQueue}
-            isInQueue={isInQueue}
-            queuePosition={queuePosition}
+            onPlay={handlePlayGame}
           />
       )}
 

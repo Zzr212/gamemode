@@ -17,15 +17,12 @@ export interface ServerToClientEvents {
   newPlayer: (player: PlayerState) => void;
   playerMoved: (player: PlayerState) => void;
   playerDisconnected: (id: string) => void;
-  queueUpdate: (position: number) => void;
-  grantEntry: () => void;
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
   pingSync: (callback: () => void) => void;
-  joinQueue: () => void;
-  leaveQueue: () => void;
+  requestGameStart: () => void;
 }
 
 export interface JoystickData {
