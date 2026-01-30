@@ -3,7 +3,7 @@ import { useGLTF, useAnimations } from '@react-three/drei';
 import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
 import * as THREE from 'three';
-import { clone as cloneGLTF } from 'three-stdlib';
+import { SkeletonUtils } from 'three-stdlib';
 import { ThreeElements } from '@react-three/fiber';
 
 declare global {
@@ -24,8 +24,8 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
 
-  // Deep clone
-  const clone = useMemo(() => cloneGLTF(scene), [scene]);
+  // Deep clone using SkeletonUtils to ensure SkinnedMesh works correctly
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   
   useGraph(clone);
   

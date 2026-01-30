@@ -104,10 +104,10 @@ io.on('connection', (socket) => {
 });
 
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
-app.use('/', express.static(distPath));
+app.use('/', express.static(distPath) as any);
 
 const rootPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../' : '../');
-app.use('/', express.static(path.join(rootPath, 'public')));
+app.use('/', express.static(path.join(rootPath, 'public')) as any);
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
