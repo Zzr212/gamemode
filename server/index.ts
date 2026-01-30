@@ -38,7 +38,7 @@ io.on('connection', (socket) => {
         z: randomZ 
     },
     rotation: 0,
-    animation: 'idle',
+    animation: 'Idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
   };
 
@@ -48,14 +48,14 @@ io.on('connection', (socket) => {
     if (players[socket.id]) {
       players[socket.id].position = position;
       players[socket.id].rotation = rotation;
-      players[socket.id].animation = animation;
+      players[socket.id].animation = animation; 
       socket.broadcast.emit('playerMoved', players[socket.id]);
     }
   });
 
   // Ping listener for latency check
   socket.on('pingSync', (callback) => {
-    callback(); // Acknowledge immediately
+    if (typeof callback === 'function') callback(); 
   });
 
   socket.on('disconnect', () => {

@@ -53,6 +53,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
         
         // Robust case-insensitive matcher
         const getActionKey = (query: string) => {
+             if (!query) return undefined;
              const lowerQuery = query.toLowerCase();
              // 1. Check exact or lowercase match
              const exact = allActions.find(key => key.toLowerCase() === lowerQuery);
@@ -83,10 +84,13 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             const currentAction = actions[targetKey];
             const prevKey = previousAction.current;
 
-            // Only transition if the animation key changed OR if it's a jump (which needs reset)
-            if (currentAction && (targetKey !== prevKey || animation.toLowerCase() === 'jump')) {
+            // Transition if:
+            // 1. Animation key changed
+            // 2. OR it is a 'Jump' (always replay)
+            // 3. OR the current action is somehow not running (safety check)
+            if (currentAction && (targetKey !== prevKey || animation.toLowerCase() === 'jump' || !currentAction.isRunning())) {
                 
-                // Fade out all other actions
+                // Fade out all other actions properly
                 allActions.forEach(key => {
                     if (key !== targetKey && actions[key]) {
                         actions[key]?.fadeOut(0.2);

@@ -1,4 +1,4 @@
-import React, { useRef, Suspense, Component, ReactNode, useState, useEffect } from 'react';
+import React, { useRef, Suspense, Component, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
@@ -71,7 +71,13 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
 
   return (
     <group ref={groupRef}>
+      {/* 
+         KEY FIX: Adding 'key={data.animation}' forces the component to remount 
+         whenever the animation string changes. This ensures the new animation 
+         (Run/Jump) starts playing immediately and prevents "sliding" in Idle pose.
+      */}
       <PlayerModel 
+        key={data.animation}
         position={{x:0, y:0, z:0}} 
         rotation={0} 
         animation={data.animation} 
@@ -315,9 +321,10 @@ const PlayerController: React.FC<{
 export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
   const [dpr, setDpr] = useState(1.5); 
 
-  const handlePlayerMove = (pos: Vector3, rot: number, anim: string) => {
+  // Memoize handler to prevent unnecessary re-renders in PlayerController
+  const handlePlayerMove = useCallback((pos: Vector3, rot: number, anim: string) => {
     socket.emit('move', pos, rot, anim);
-  };
+  }, []);
 
   return (
     <>

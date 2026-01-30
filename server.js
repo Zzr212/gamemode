@@ -30,6 +30,7 @@ io.on('connection', (socket) => {
     id: socket.id,
     position: { x: 0, y: 0, z: 0 },
     rotation: 0,
+    animation: 'Idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
   };
 
@@ -39,12 +40,17 @@ io.on('connection', (socket) => {
   // Broadcast new player to others
   socket.broadcast.emit('newPlayer', players[socket.id]);
 
-  socket.on('move', (position, rotation) => {
+  socket.on('move', (position, rotation, animation) => {
     if (players[socket.id]) {
       players[socket.id].position = position;
       players[socket.id].rotation = rotation;
+      players[socket.id].animation = animation; // Update animation state
       socket.broadcast.emit('playerMoved', players[socket.id]);
     }
+  });
+
+  socket.on('pingSync', (callback) => {
+    callback();
   });
 
   socket.on('disconnect', () => {
