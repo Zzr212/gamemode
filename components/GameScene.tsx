@@ -1,6 +1,6 @@
 import React, { useRef, Suspense, Component, ReactNode, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Environment, PerspectiveCamera, Stars, Loader, PerformanceMonitor } from '@react-three/drei';
+import { PerspectiveCamera, Stars, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';

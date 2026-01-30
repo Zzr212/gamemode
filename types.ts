@@ -19,6 +19,8 @@ export interface ServerToClientEvents {
   playerDisconnected: (id: string) => void;
   // Editor events
   spawnPointUpdated: (pos: Vector3) => void;
+  // Sync event for immediate spawn
+  connectionData: (data: { id: string; spawnPoint: Vector3; players: Record<string, PlayerState> }) => void;
 }
 
 export interface ClientToServerEvents {
