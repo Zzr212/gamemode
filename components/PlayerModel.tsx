@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useGraph } from '@react-three/fiber';
+import { useGraph, ThreeElements } from '@react-three/fiber';
 import { Vector3 } from '../types';
-import * as THREE from 'three';
+import { Group, LoopOnce, LoopRepeat, Mesh, AnimationAction } from 'three';
 import { SkeletonUtils } from 'three-stdlib';
-import { ThreeElements } from '@react-three/fiber';
 
 declare global {
   namespace JSX {
@@ -19,7 +18,7 @@ interface PlayerModelProps {
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
-  const group = useRef<THREE.Group>(null);
+  const group = useRef<Group>(null);
   const previousAction = useRef<string>('');
   
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
@@ -87,10 +86,10 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             currentAction.reset().fadeIn(0.2).play();
 
             if (animation === 'jump') {
-                currentAction.setLoop(THREE.LoopOnce, 1);
+                currentAction.setLoop(LoopOnce, 1);
                 currentAction.clampWhenFinished = true;
             } else {
-                currentAction.setLoop(THREE.LoopRepeat, Infinity);
+                currentAction.setLoop(LoopRepeat, Infinity);
             }
 
             previousAction.current = targetName;

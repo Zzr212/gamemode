@@ -1,20 +1,26 @@
 import React, { useEffect, useRef, useState, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, ThreeElements } from '@react-three/fiber';
 import { Environment, OrbitControls, TransformControls, Html } from '@react-three/drei';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
 import { Vector3 } from '../types';
-import * as THREE from 'three';
+import { Mesh } from 'three';
 
 interface MapEditorProps {
   onBack: () => void;
+}
+
+declare global {
+  namespace JSX {
+    interface IntrinsicElements extends ThreeElements {}
+  }
 }
 
 const EditorScene: React.FC<{ 
     setTempPos: (pos: Vector3) => void, 
     savedPos: Vector3 
 }> = ({ setTempPos, savedPos }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const meshRef = useRef<Mesh>(null);
   
   // Initialize with savedPos
   const [localPos, setLocalPos] = useState(savedPos);

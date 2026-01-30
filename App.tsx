@@ -3,11 +3,10 @@ import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
-import { MapEditor } from './components/MapEditor';
 import { connectSocket, disconnectSocket, socket } from './services/socketService';
 import { JoystickData, PlayerState, Vector3 } from './types';
 
-type AppState = 'MENU' | 'GAME' | 'EDITOR';
+type AppState = 'MENU' | 'GAME';
 
 function App() {
   const [appState, setAppState] = useState<AppState>('MENU');
@@ -22,13 +21,11 @@ function App() {
 
   // Handle Socket Connection based on App State
   useEffect(() => {
-    // Only connect socket when entering GAME or EDITOR
-    if (appState !== 'MENU') {
+    if (appState === 'GAME') {
         connectSocket();
 
-        // NEW: Single event that brings all necessary data
         const onConnectionData = (data: { id: string, spawnPoint: Vector3, players: Record<string, PlayerState> }) => {
-            console.log("Joined Game via New Spawn System", data);
+            console.log("Joined Game:", data);
             setMyId(data.id);
             setPlayers(data.players);
         };
@@ -97,13 +94,7 @@ function App() {
       {appState === 'MENU' && (
           <MainMenu 
             onPlay={() => setAppState('GAME')} 
-            onEditor={() => setAppState('EDITOR')} 
           />
-      )}
-
-      {/* --- EDITOR STATE --- */}
-      {appState === 'EDITOR' && (
-          <MapEditor onBack={() => setAppState('MENU')} />
       )}
 
       {/* --- GAME STATE --- */}

@@ -1,7 +1,7 @@
 import React, { useRef, Suspense, Component, ReactNode, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { PerspectiveCamera, Stars, Loader, PerformanceMonitor } from '@react-three/drei';
-import * as THREE from 'three';
+import { Vector3 as ThreeVector3, Group, Raycaster } from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
@@ -33,11 +33,11 @@ interface GameSceneProps {
 
 // Camera follows player
 const CameraController: React.FC<{
-  targetGroup: React.RefObject<THREE.Group>;
+  targetGroup: React.RefObject<Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
 }> = ({ targetGroup, cameraRotation }) => {
   const { camera } = useThree();
-  const currentPos = useRef(new THREE.Vector3(0, 5, 10));
+  const currentPos = useRef(new ThreeVector3(0, 10, 10)); // Start high
 
   useFrame(() => {
     if (!targetGroup.current) return;
@@ -56,10 +56,10 @@ const CameraController: React.FC<{
     const offsetX = Math.sin(yaw) * hDist;
     const offsetZ = Math.cos(yaw) * hDist;
 
-    const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
+    const targetVec = new ThreeVector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
     
     // Smooth lerp for camera
-    currentPos.current.lerp(new THREE.Vector3(
+    currentPos.current.lerp(new ThreeVector3(
         targetVec.x + offsetX, 
         targetVec.y + height + vDist, 
         targetVec.z + offsetZ
@@ -82,16 +82,16 @@ const PlayerController: React.FC<{
 }> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos }) => {
   const { scene } = useThree();
   
-  const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
+  const pos = useRef(new ThreeVector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
-  const velocity = useRef(new THREE.Vector3(0, 0, 0));
+  const velocity = useRef(new ThreeVector3(0, 0, 0));
   const animationState = useRef('idle');
   const isGrounded = useRef(false);
   
   // Raycaster
-  const downRaycaster = useRef(new THREE.Raycaster());
-  const playerGroupRef = useRef<THREE.Group>(null);
-  const modelRotationGroupRef = useRef<THREE.Group>(null);
+  const downRaycaster = useRef(new Raycaster());
+  const playerGroupRef = useRef<Group>(null);
+  const modelRotationGroupRef = useRef<Group>(null);
 
   // Constants
   const SPEED = 0.15;
@@ -134,8 +134,8 @@ const PlayerController: React.FC<{
 
     // Check CURRENT ground
     if (mapObject) {
-        const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
-        downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
+        const origin = pos.current.clone().add(new ThreeVector3(0, 5, 0));
+        downRaycaster.current.set(origin, new ThreeVector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
         if (intersects.length > 0) {
             groundY = intersects[0].point.y;
@@ -146,10 +146,10 @@ const PlayerController: React.FC<{
     let allowMove = true;
     
     if (isMoving && mapObject) {
-        const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
-        const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 5, 0));
+        const futurePos = pos.current.clone().add(new ThreeVector3(moveX, 0, moveZ));
+        const futureOrigin = futurePos.clone().add(new ThreeVector3(0, 5, 0));
         
-        downRaycaster.current.set(futureOrigin, new THREE.Vector3(0, -1, 0));
+        downRaycaster.current.set(futureOrigin, new ThreeVector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
         
         if (intersects.length > 0) {
@@ -159,9 +159,7 @@ const PlayerController: React.FC<{
             // Wall check: Too high to step up
             if (heightDiff > 0.6) allowMove = false;
         } else {
-            // GAP DETECTED: No ground found at future position
-            // If we are currently grounded, do NOT allow walking into void (small cracks)
-            // Exception: If we are jumping/falling already, allow it.
+            // GAP DETECTED
             if (isGrounded.current) {
                 allowMove = false; 
             }
@@ -227,7 +225,6 @@ const PlayerController: React.FC<{
 };
 
 export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
-  // Optimization: Decrease pixel ratio on low perf
   const [dpr, setDpr] = useState(1.5); 
 
   const handlePlayerMove = (pos: Vector3, rot: number, anim: string) => {
@@ -237,20 +234,21 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
   return (
     <>
       <Canvas 
-        dpr={dpr} // Dynamic pixel ratio
-        gl={{ antialias: false, powerPreference: 'high-performance' }} // Disable AA for perf
+        dpr={dpr} 
+        gl={{ antialias: false, powerPreference: 'high-performance' }} 
       >
         <PerformanceMonitor 
              onIncline={() => setDpr(1.5)} 
-             onDecline={() => setDpr(1)} // Drop to 1.0 DPR on weak devices
+             onDecline={() => setDpr(1)} 
         />
 
-        {/* Reduce draw distance (far=50) and add fog to hide cutoff */}
-        <PerspectiveCamera makeDefault fov={60} far={50} />
+        {/* DEFAULT CAMERA: Used when player is not yet loaded or myId is null */}
+        {/* Placed high up (y=20) looking down at center */}
+        <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={60} onUpdate={c => c.lookAt(0, 0, 0)}/>
+
         <fog attach="fog" args={['#000', 30, 50]} />
 
         <ambientLight intensity={0.7} />
-        {/* Shadow optimization: reduce map size */}
         <directionalLight 
           position={[20, 30, 10]} 
           intensity={1.2} 
@@ -259,7 +257,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           shadow-bias={-0.0001}
         />
         
-        {/* Simple sky */}
         <Stars radius={40} depth={20} count={2000} factor={3} fade />
         
         <Suspense fallback={null}>
