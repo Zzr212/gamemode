@@ -20,10 +20,10 @@ declare global {
 interface PlayerModelProps {
   position: Vector3;
   rotation: number;
-  animation?: string; // 'idle' | 'run' | 'jump'
+  animation?: string; // 'Idle' | 'Run' | 'Jump'
 }
 
-export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
+export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'Idle' }) => {
   const group = useRef<THREE.Group>(null);
   const previousAction = useRef<string>('');
   
@@ -50,55 +50,62 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   useEffect(() => {
     if (actions) {
         const allActions = Object.keys(actions);
-        
-        // Helper: Case insensitive partial match
-        const findAction = (query: string) => 
-            allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
+        // console.log("Available animations on model:", allActions); // Uncomment to debug
 
-        // MAPPING
-        // Fix 1: Explicitly check for "Run" as requested and ensure we use the string key
-        const runKey = (actions['Run'] ? 'Run' : null) || findAction('Run') || findAction('run') || findAction('sprint');
-        const jumpKey = (actions['Jump'] ? 'Jump' : null) || findAction('Jump') || findAction('jump');
-        // Default idle fallback
-        const idleKey = (actions['Idle'] ? 'Idle' : null) || findAction('Idle') || findAction('idle') || allActions[0];
+        // Helper: Find matching action key case-insensitively
+        const getActionKey = (query: string) => {
+             // 1. Exact match
+             if (actions[query]) return query;
+             // 2. Case insensitive match
+             const found = allActions.find(key => key.toLowerCase() === query.toLowerCase());
+             if (found) return found;
+             // 3. Partial match (e.g. "Armature|Run" matches "Run")
+             const partial = allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
+             return partial;
+        };
 
-        let targetKey = '';
+        // Determine target action based on prop
+        let targetKey: string | undefined = undefined;
 
-        if (animation === 'jump' && jumpKey) {
-            targetKey = jumpKey;
-        } else if (animation === 'run') {
-            targetKey = runKey || '';
+        if (animation === 'Run') {
+            targetKey = getActionKey('Run') || getActionKey('Sprint') || getActionKey('Walk');
+        } else if (animation === 'Jump') {
+            targetKey = getActionKey('Jump');
         } else {
-            targetKey = idleKey || '';
+            targetKey = getActionKey('Idle') || getActionKey('Stand');
         }
 
-        // Final safety check if targetKey is actually in actions
-        // If not found, default to first available animation to prevent T-pose
-        if (!actions[targetKey] && allActions.length > 0) {
+        // Fallback: If no match found, use the first available animation
+        if (!targetKey && allActions.length > 0) {
             targetKey = allActions[0];
         }
 
-        const currentAction = actions[targetKey];
-        
-        if (currentAction && (targetKey !== previousAction.current || animation === 'jump')) {
-            
-            // Fade out others
-            allActions.forEach(key => {
-                if (key !== targetKey && actions[key]) {
-                    actions[key]?.fadeOut(0.2);
+        if (targetKey && actions[targetKey]) {
+            const currentAction = actions[targetKey];
+            const prevKey = previousAction.current;
+
+            // Only transition if the action changes OR it's a Jump (which re-triggers)
+            if (targetKey !== prevKey || animation === 'Jump') {
+                
+                // Fade out all other actions
+                allActions.forEach(key => {
+                    if (key !== targetKey && actions[key]) {
+                        actions[key]?.fadeOut(0.2);
+                    }
+                });
+
+                // Play new action
+                currentAction.reset().fadeIn(0.2).play();
+
+                if (animation === 'Jump') {
+                    currentAction.setLoop(THREE.LoopOnce, 1);
+                    currentAction.clampWhenFinished = true;
+                } else {
+                    currentAction.setLoop(THREE.LoopRepeat, Infinity);
                 }
-            });
 
-            currentAction.reset().fadeIn(0.2).play();
-
-            if (animation === 'jump') {
-                currentAction.setLoop(THREE.LoopOnce, 1);
-                currentAction.clampWhenFinished = true;
-            } else {
-                currentAction.setLoop(THREE.LoopRepeat, Infinity);
+                previousAction.current = targetKey;
             }
-
-            previousAction.current = targetKey;
         }
     }
   }, [animation, actions]);

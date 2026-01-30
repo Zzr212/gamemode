@@ -53,8 +53,6 @@ const CameraController: React.FC<{
     const height = 4;
 
     const yaw = cameraRotation.current.yaw;
-    // Fix 3: Increase pitch range to allow looking up and down more freely
-    // Previous was -0.2 to 1.2. New is -0.5 (looking up) to 1.5 (looking down from above)
     const pitch = Math.max(-0.5, Math.min(1.5, cameraRotation.current.pitch));
 
     const hDist = distance * Math.cos(pitch);
@@ -92,7 +90,7 @@ const PlayerController: React.FC<{
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
   const velocity = useRef(new THREE.Vector3(0, 0, 0));
-  const animationState = useRef('idle');
+  const animationState = useRef('Idle');
   const isGrounded = useRef(false);
   
   // Raycaster
@@ -209,9 +207,10 @@ const PlayerController: React.FC<{
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
     // 5. Animation
-    let newAnim = 'idle';
-    if (!isGrounded.current && velocity.current.y > 0) newAnim = 'jump';
-    else if (isMoving) newAnim = 'run';
+    // Use Capitalized names to match GLTF common standards and PlayerModel logic
+    let newAnim = 'Idle';
+    if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
+    else if (isMoving) newAnim = 'Run';
 
     // 6. Sync
     if (animationState.current !== newAnim || (isMoving && Math.random() < 0.2)) {

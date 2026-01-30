@@ -16,7 +16,7 @@ function App() {
 
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
-  const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.3 });
+  const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
   const jumpRef = useRef<boolean>(false);
 
   // Handle Socket Connection based on App State
@@ -85,8 +85,12 @@ function App() {
   const handleCameraRotate = (dx: number, dy: number) => {
     const sensitivity = 0.005;
     cameraRotationRef.current.yaw -= dx * sensitivity;
-    // Y-axis controls pitch (looking up/down)
-    cameraRotationRef.current.pitch -= dy * sensitivity;
+    
+    // Fix: Clamp pitch immediately to prevent it from drifting into infinity
+    // This fixes the issue where the camera gets "stuck" after looking too far up or down
+    const currentPitch = cameraRotationRef.current.pitch;
+    const newPitch = currentPitch - dy * sensitivity;
+    cameraRotationRef.current.pitch = Math.max(-0.5, Math.min(1.5, newPitch));
   };
 
   const handleJump = () => {
