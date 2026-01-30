@@ -1,12 +1,19 @@
 import React, { Suspense } from 'react';
 import { Canvas, ThreeElements } from '@react-three/fiber';
 import { Environment, Float, ContactShadows, SpotLight } from '@react-three/drei';
-import * as THREE from 'three';
 import { PlayerModel } from './PlayerModel';
 
 declare global {
   namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
+    interface IntrinsicElements extends ThreeElements {
+        ambientLight: any;
+        pointLight: any;
+        mesh: any;
+        circleGeometry: any;
+        meshStandardMaterial: any;
+        ringGeometry: any;
+        meshBasicMaterial: any;
+    }
   }
 }
 

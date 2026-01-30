@@ -1,11 +1,14 @@
 import React, { useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { ThreeElements } from '@react-three/fiber';
-import * as THREE from 'three';
+import { DoubleSide } from 'three';
 
 declare global {
   namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
+    interface IntrinsicElements extends ThreeElements {
+        group: any;
+        primitive: any;
+    }
   }
 }
 
@@ -23,7 +26,7 @@ export const MapModel: React.FC = () => {
                 child.receiveShadow = true;
                 // Important: Ensure material is compatible with lighting
                 if (child.material) {
-                    child.material.side = THREE.DoubleSide; 
+                    child.material.side = DoubleSide; 
                 }
             }
         });
