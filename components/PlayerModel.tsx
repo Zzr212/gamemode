@@ -84,8 +84,8 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             const currentAction = actions[targetKey];
             const prevKey = previousAction.current;
 
-            // Only transition if the action changes OR it's a Jump (which re-triggers)
-            if (targetKey !== prevKey || animation === 'Jump') {
+            // Fix TS18047: Ensure currentAction is not null before using it
+            if (currentAction && (targetKey !== prevKey || animation === 'Jump')) {
                 
                 // Fade out all other actions
                 allActions.forEach(key => {
