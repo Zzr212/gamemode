@@ -21,6 +21,7 @@ export interface ServerToClientEvents {
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
+  pingSync: (callback: () => void) => void;
 }
 
 export interface JoystickData {

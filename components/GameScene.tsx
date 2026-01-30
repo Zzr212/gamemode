@@ -51,8 +51,6 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
     if (groupRef.current) {
       // 1. Position Interpolation (Lerp)
       // IMPORTANT: We use the ref for position to allow smooth interpolation.
-      // If we controlled the 'position' prop in the JSX, React would overwrite 
-      // our smooth movement every time 'data' changed from the server.
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       
       // Dynamic lerp factor: move faster if far away (teleport prevention)
@@ -106,7 +104,6 @@ const CameraController: React.FC<{
     // Yaw: Rotation around Y (Left/Right)
     const yaw = cameraRotation.current.yaw;
     // Pitch: Rotation Up/Down. 
-    // Increased lower limit to -1.2 to allow looking UP more.
     const pitch = Math.max(-1.2, Math.min(1.5, cameraRotation.current.pitch));
 
     // Spherical coordinates calculation
@@ -118,7 +115,6 @@ const CameraController: React.FC<{
     const orbitZ = Math.cos(yaw) * hDist;
 
     // Shoulder Offset Vector (Perpendicular to look direction)
-    // If LookDir is (sin(yaw), cos(yaw)), Right Vector is (cos(yaw), -sin(yaw))
     const offsetX = Math.cos(yaw) * shoulderOffset;
     const offsetZ = -Math.sin(yaw) * shoulderOffset;
 
@@ -130,7 +126,6 @@ const CameraController: React.FC<{
     let finalCamY = targetPosition.y + height + vDist;
     
     // FLOOR CLAMP: Prevent camera from going underground
-    // Assuming floor is around 0. We clamp to 0.5 to keep it slightly above.
     finalCamY = Math.max(0.5, finalCamY);
 
     const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
@@ -257,20 +252,23 @@ const PlayerController: React.FC<{
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // Animation
+    // Animation Logic
     let newAnim = 'Idle';
     if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
     else if (isMoving) newAnim = 'Run';
 
-    if (animationRef.current !== newAnim) {
+    // IMPORTANT: Check change BEFORE updating the ref to ensure we trigger the network send
+    const animChanged = animationRef.current !== newAnim;
+
+    if (animChanged) {
         animationRef.current = newAnim;
         setVisualAnimation(newAnim);
     }
 
     // 3. Network Optimization
-    // Send update only every 50ms OR if animation changed critically
     const now = Date.now();
-    const shouldSend = (now - lastSendTime.current > 50) || (animationRef.current !== newAnim);
+    // Send if time elapsed OR animation actually changed in this frame
+    const shouldSend = (now - lastSendTime.current > 50) || animChanged;
     
     if (shouldSend) {
         onMove(pos.current, rotation.current, animationRef.current);
