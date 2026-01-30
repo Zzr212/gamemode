@@ -19,30 +19,75 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
+// Game State
 const players: Record<string, PlayerState> = {};
+// Queue State
+const loginQueue: string[] = [];
+let isProcessingQueue = false;
+
+// Queue Processor loop
+const processQueue = async () => {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    // Process one player every 1.5 seconds to prevent spawn overlapping/lag
+    const interval = setInterval(() => {
+        if (loginQueue.length > 0) {
+            const socketId = loginQueue.shift(); // Get first in line
+            if (socketId) {
+                const socket = io.sockets.sockets.get(socketId);
+                if (socket) {
+                    socket.emit('loginAllowed');
+                }
+            }
+            // Update positions for everyone else remaining in queue
+            loginQueue.forEach((sid, index) => {
+                const s = io.sockets.sockets.get(sid);
+                if (s) s.emit('queueUpdate', index + 1);
+            });
+        } else {
+            // Queue empty, stop processing
+            clearInterval(interval);
+            isProcessingQueue = false;
+        }
+    }, 1500);
+};
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  socket.emit('currentPlayers', players);
+  // 1. Add user to Queue immediately upon connection
+  loginQueue.push(socket.id);
+  socket.emit('queueUpdate', loginQueue.length);
+  
+  // Trigger queue processor if it's not running
+  if (!isProcessingQueue) {
+      processQueue();
+  }
 
-  // Random Spawning Logic
-  const randomX = (Math.random() - 0.5) * 40; 
-  const randomZ = (Math.random() - 0.5) * 40;
+  // 2. Wait for user to request Spawn (after they pass the queue)
+  socket.on('spawn', () => {
+      // Logic for spawning the player
+      const randomX = (Math.random() - 0.5) * 40; 
+      const randomZ = (Math.random() - 0.5) * 40;
 
-  players[socket.id] = {
-    id: socket.id,
-    position: { 
-        x: randomX, 
-        y: 5, 
-        z: randomZ 
-    },
-    rotation: 0,
-    animation: 'Idle',
-    color: '#' + Math.floor(Math.random()*16777215).toString(16)
-  };
+      players[socket.id] = {
+        id: socket.id,
+        position: { 
+            x: randomX, 
+            y: 5, 
+            z: randomZ 
+        },
+        rotation: 0,
+        animation: 'Idle',
+        color: '#' + Math.floor(Math.random()*16777215).toString(16)
+      };
 
-  socket.broadcast.emit('newPlayer', players[socket.id]);
+      // Send existing players to the new guy
+      socket.emit('currentPlayers', players);
+      // Notify others
+      socket.broadcast.emit('newPlayer', players[socket.id]);
+  });
 
   socket.on('move', (position, rotation, animation) => {
     if (players[socket.id]) {
@@ -60,8 +105,18 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
-    delete players[socket.id];
-    io.emit('playerDisconnected', socket.id);
+    
+    // Remove from queue if they leave while waiting
+    const qIndex = loginQueue.indexOf(socket.id);
+    if (qIndex !== -1) {
+        loginQueue.splice(qIndex, 1);
+    }
+
+    // Remove from game
+    if (players[socket.id]) {
+        delete players[socket.id];
+        io.emit('playerDisconnected', socket.id);
+    }
   });
 });
 

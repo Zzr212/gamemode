@@ -1,7 +1,8 @@
-import React, { Suspense } from 'react';
-import { Canvas, ThreeElements } from '@react-three/fiber';
-import { Environment, Float, ContactShadows, SpotLight } from '@react-three/drei';
+import React, { Suspense, useRef, useState } from 'react';
+import { Canvas, ThreeElements, useFrame } from '@react-three/fiber';
+import { Environment, Float, ContactShadows, SpotLight, Text } from '@react-three/drei';
 import { PlayerModel } from './PlayerModel';
+import * as THREE from 'three';
 
 declare global {
   namespace JSX {
@@ -13,15 +14,115 @@ declare global {
         meshStandardMaterial: any;
         ringGeometry: any;
         meshBasicMaterial: any;
+        group: any;
     }
   }
 }
 
 interface MainMenuProps {
-  onPlay: () => void;
+  onStartQueue: () => void;
+  queuePosition: number | null;
+  isReady: boolean;
 }
 
-const MenuScene: React.FC = () => {
+// --- 3D PLAY BUTTON HOLOGRAM ---
+const PlayHologram: React.FC<{ onClick: () => void }> = ({ onClick }) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const [hovered, setHovered] = useState(false);
+
+    useFrame((state) => {
+        if (groupRef.current) {
+            // Gentle floating and rotation
+            groupRef.current.rotation.y += 0.02;
+            groupRef.current.position.y = 1.8 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+            
+            // Pulse scale on hover
+            const targetScale = hovered ? 1.2 : 1;
+            groupRef.current.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.1);
+        }
+    });
+
+    return (
+        <group 
+            ref={groupRef} 
+            position={[-1.2, 1.8, 0]} // Left of the head
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered(true); }}
+            onPointerOut={() => { document.body.style.cursor = 'auto'; setHovered(false); }}
+        >
+            {/* Holographic Ring */}
+            <mesh rotation={[0, 0, 0]}>
+                <ringGeometry args={[0.3, 0.35, 32]} />
+                <meshBasicMaterial color="#00ffff" side={THREE.DoubleSide} transparent opacity={0.8} />
+            </mesh>
+            
+            {/* Play Triangle Symbol */}
+            <mesh rotation={[0, 0, -Math.PI / 2]} position={[0.05, 0, 0]}>
+                <circleGeometry args={[0.2, 3]} />
+                <meshBasicMaterial color="#00ffff" transparent opacity={0.6} />
+            </mesh>
+
+            {/* Glow Effect */}
+            <pointLight distance={1} intensity={2} color="#00ffff" />
+        </group>
+    );
+};
+
+// --- 3D QUEUE STATUS HOLOGRAM ---
+const QueueHologram: React.FC<{ positionNum: number | null; isReady: boolean }> = ({ positionNum, isReady }) => {
+    const groupRef = useRef<THREE.Group>(null);
+
+    useFrame((state) => {
+        if (groupRef.current) {
+             // Rotate slowly
+             groupRef.current.rotation.y = Math.sin(state.clock.elapsedTime) * 0.2;
+        }
+    });
+
+    let textContent = "CONNECTING...";
+    let color = "#ffaa00";
+
+    if (positionNum !== null) {
+        textContent = `QUEUE: ${positionNum}`;
+        color = "#ffaa00";
+    }
+    
+    if (isReady) {
+        textContent = "LOADING..."; // Transition to game
+        color = "#00ff00";
+    }
+
+    return (
+        <group ref={groupRef} position={[0, 0.2, 1]} rotation={[-Math.PI / 6, 0, 0]}>
+             {/* Holographic Base */}
+             <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[0.4, 0.5, 32]} />
+                <meshBasicMaterial color={color} transparent opacity={0.5} side={THREE.DoubleSide}/>
+            </mesh>
+
+             {/* Text Display */}
+             <Text
+                position={[0, 0.4, 0]}
+                fontSize={0.25}
+                color={color}
+                anchorX="center"
+                anchorY="middle"
+                outlineWidth={0.02}
+                outlineColor="#000000"
+             >
+                {textContent}
+             </Text>
+             <pointLight distance={1} intensity={1} color={color} position={[0, 0.2, 0]}/>
+        </group>
+    );
+};
+
+const MenuScene: React.FC<{ 
+    queueActive: boolean; 
+    onPlay: () => void; 
+    queuePosition: number | null;
+    isReady: boolean;
+}> = ({ queueActive, onPlay, queuePosition, isReady }) => {
   return (
     <>
       <ambientLight intensity={0.2} />
@@ -35,7 +136,7 @@ const MenuScene: React.FC = () => {
       />
       <pointLight position={[-10, -10, -10]} intensity={0.5} color="blue" />
 
-      {/* Podium/Visual Circle */}
+      {/* Podium */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]}>
         <circleGeometry args={[2, 64]} />
         <meshStandardMaterial color="#222" roughness={0.4} metalness={0.8} />
@@ -47,50 +148,56 @@ const MenuScene: React.FC = () => {
         <meshBasicMaterial color="#4f46e5" />
       </mesh>
 
-      {/* Floating Character */}
-      <Float speed={2} rotationIntensity={0.1} floatIntensity={0.1}>
+      {/* Character */}
+      <group position={[0, 0, 0]}>
          <PlayerModel 
             position={{x:0, y:0, z:0}} 
             rotation={0} 
-            animation="idle" 
+            animation="Idle" 
          />
-      </Float>
+      </group>
+
+      {/* --- CONDITIONAL UI ELEMENTS --- */}
+      
+      {/* 1. Play Button (Show only if NOT queueing) */}
+      {!queueActive && (
+          <PlayHologram onClick={onPlay} />
+      )}
+
+      {/* 2. Queue Info (Show only if queueing) */}
+      {queueActive && (
+          <QueueHologram positionNum={queuePosition} isReady={isReady} />
+      )}
 
       <ContactShadows resolution={1024} scale={10} blur={2} opacity={0.5} far={10} color="#000000" />
-      
       <Environment preset="night" />
     </>
   );
 };
 
-export const MainMenu: React.FC<MainMenuProps> = ({ onPlay }) => {
+export const MainMenu: React.FC<MainMenuProps> = ({ onStartQueue, queuePosition, isReady }) => {
+  // Local state to track if we clicked play to switch visualization
+  // The actual connection logic is driven by App.tsx, but we need to know locally to hide the button
+  const [hasClickedPlay, setHasClickedPlay] = useState(false);
+
+  const handlePlay = () => {
+    setHasClickedPlay(true);
+    onStartQueue();
+  };
+
   return (
     <div className="w-full h-full relative bg-gray-900">
-      {/* Moved camera back (z: 8) and up slightly so model fits on mobile screens */}
-      <Canvas shadows camera={{ position: [0, 1.5, 9], fov: 35 }}>
+      <Canvas shadows camera={{ position: [0, 1.5, 6], fov: 40 }}>
         <Suspense fallback={null}>
-          <MenuScene />
+          <MenuScene 
+            queueActive={hasClickedPlay} 
+            onPlay={handlePlay} 
+            queuePosition={queuePosition}
+            isReady={isReady}
+          />
         </Suspense>
       </Canvas>
-
-      {/* UI Overlay */}
-      <div className="absolute inset-0 flex flex-col items-center justify-end pb-24 pointer-events-none">
-        
-        <div className="flex-grow flex items-center justify-center pt-10">
-            <h1 className="text-4xl md:text-6xl font-bold text-white tracking-widest uppercase drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] opacity-80">
-                MULTIPLAYER 3D
-            </h1>
-        </div>
-
-        <div className="pointer-events-auto">
-            <button 
-                onClick={onPlay}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white text-2xl font-bold py-4 px-20 rounded-full shadow-[0_0_20px_rgba(79,70,229,0.5)] transition-all transform hover:scale-105 active:scale-95 border border-indigo-400"
-            >
-                PLAY GAME
-            </button>
-        </div>
-      </div>
+      {/* No HTML UI Overlays anymore - purely 3D interaction */}
     </div>
   );
 };
