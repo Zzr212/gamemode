@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 3000;
 
 // --- CONFIGURATION ---
 // Default spawn point (editable via Map Editor)
+// Stores in memory (will reset on server restart)
 let globalSpawnPoint: Vector3 = { x: 0, y: 5, z: 0 };
 
 // State
@@ -30,8 +31,15 @@ const players: Record<string, PlayerState> = {};
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Initial Spawn Logic: Use the global spawn point with a tiny random offset
-  // to prevent exact overlapping if multiple people join at once.
+  // 1. Initial Data Handshake
+  // Send the current spawn point immediately so Editor/Game knows where to start
+  socket.emit('spawnPointUpdated', globalSpawnPoint);
+  
+  // Send current players to new joiner
+  socket.emit('currentPlayers', players);
+
+  // 2. Spawn Logic
+  // Use the global spawn point with a tiny random offset
   const spawnOffset = {
       x: (Math.random() - 0.5) * 2,
       z: (Math.random() - 0.5) * 2
@@ -41,19 +49,13 @@ io.on('connection', (socket) => {
     id: socket.id,
     position: { 
         x: globalSpawnPoint.x + spawnOffset.x, 
-        y: globalSpawnPoint.y, // Drop from set height
+        y: globalSpawnPoint.y, 
         z: globalSpawnPoint.z + spawnOffset.z 
     },
     rotation: 0,
     animation: 'idle',
     color: '#' + Math.floor(Math.random()*16777215).toString(16)
   };
-
-  // Send current players to new joiner
-  socket.emit('currentPlayers', players);
-  
-  // Send the current spawn point (for editor)
-  socket.emit('spawnPointUpdated', globalSpawnPoint);
 
   // Broadcast new player to others
   socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -70,11 +72,12 @@ io.on('connection', (socket) => {
   // EDITOR: Update global spawn point
   socket.on('updateSpawnPoint', (pos: Vector3) => {
       globalSpawnPoint = pos;
-      // Broadcast to all editors/clients
+      // Broadcast to all editors/clients so they update in real-time
       io.emit('spawnPointUpdated', globalSpawnPoint);
       console.log('New Spawn Point Set:', globalSpawnPoint);
   });
   
+  // Explicit request from client (Editor)
   socket.on('requestSpawnPoint', () => {
       socket.emit('spawnPointUpdated', globalSpawnPoint);
   });
