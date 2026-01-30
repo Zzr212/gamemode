@@ -3,8 +3,7 @@ import { useGLTF, useAnimations } from '@react-three/drei';
 import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
 import * as THREE from 'three';
-// We need SkeletonUtils to properly clone skinned meshes (fixes parts staying behind)
-import { SkeletonUtils } from 'three-stdlib';
+import { clone as cloneGLTF } from 'three-stdlib';
 import { ThreeElements } from '@react-three/fiber';
 
 declare global {
@@ -25,12 +24,11 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
 
-  // CRITICAL FIX: Use SkeletonUtils.clone() to deep clone the model including SkinnedMesh relations.
-  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  // Deep clone
+  const clone = useMemo(() => cloneGLTF(scene), [scene]);
   
   useGraph(clone);
   
-  // Setup Animations on the CLONED group
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => {
@@ -43,39 +41,44 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
     });
   }, [clone]);
 
+  // ANIMATION LOGIC
   useEffect(() => {
     if (actions) {
         const allActions = Object.keys(actions);
         
-        // Helper to find action by name (case insensitive)
+        // DEBUG: Print animations to console so user can verify names
+        // Check your browser console to see what your model actually has!
+        // console.log("Available Animations:", allActions);
+
+        // Helper: Case insensitive partial match
         const findAction = (query: string) => 
             allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
 
-        // MAPPING LOGIC
-        // 1. Jump
+        // MAPPING
         const jumpKey = findAction('jump');
-        // 2. Run / Walk (Prioritize Run if requested, but fallback to walk)
-        const runKey = findAction('run') || findAction('sprint') || findAction('walk');
         
-        // 3. Idle
-        const idleKey = findAction('idle') || findAction('wait') || findAction('breath') || allActions[0];
+        // Fix: Broaden search for run. Look for 'run', 'sprint', 'fast', or fallback to 'walk'.
+        const runKey = findAction('run') || findAction('sprint') || findAction('fast') || findAction('walk') || findAction('move');
+        
+        const idleKey = findAction('idle') || findAction('wait') || findAction('stand') || allActions[0];
 
         let targetKey = '';
 
         if (animation === 'jump' && jumpKey) {
             targetKey = jumpKey;
-        } else if ((animation === 'run' || animation === 'walk') && runKey) {
-            targetKey = runKey;
+        } else if (animation === 'run') {
+            // Explicitly requested run
+            targetKey = runKey || idleKey || '';
         } else {
+            // Default to idle
             targetKey = idleKey || '';
         }
 
         const currentAction = actions[targetKey];
         
-        // Only transition if the action actually changed or if it's a jump (which needs re-triggering)
         if (currentAction && (targetKey !== previousAction.current || animation === 'jump')) {
             
-            // Fade out everyone else
+            // Fade out others
             allActions.forEach(key => {
                 if (key !== targetKey && actions[key]) {
                     actions[key]?.fadeOut(0.2);
@@ -87,9 +90,6 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             if (animation === 'jump') {
                 currentAction.setLoop(THREE.LoopOnce, 1);
                 currentAction.clampWhenFinished = true;
-                
-                // After jump finishes, we usually want to blend back to idle/run via the parent component updating state,
-                // but setting clampWhenFinished helps it not snap back instantly.
             } else {
                 currentAction.setLoop(THREE.LoopRepeat, Infinity);
             }
@@ -102,8 +102,6 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   return (
     <group ref={group} position={[position.x, position.y, position.z]} rotation={[0, rotation, 0]}>
       <primitive object={clone} scale={1} />
-      
-      {/* Simple shadow blob for grounding */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
         <circleGeometry args={[0.5, 32]} />
         <meshBasicMaterial color="#000000" opacity={0.4} transparent />
@@ -112,5 +110,4 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   );
 };
 
-// Preload
 useGLTF.preload('/models/character.gltf');

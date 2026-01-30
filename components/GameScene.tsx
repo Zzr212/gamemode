@@ -30,7 +30,7 @@ class ModelErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
 
   render() {
     if (this.state.hasError) {
-      return null; // Just don't render the broken part, avoid crashing app
+      return null;
     }
     return this.props.children;
   }
@@ -55,12 +55,11 @@ const CameraController: React.FC<{
     if (!targetGroup.current) return;
 
     const targetPosition = targetGroup.current.position;
-
     const distance = 8;
-    const height = 4; // Slightly higher camera
+    const height = 4;
 
     const yaw = cameraRotation.current.yaw;
-    const pitch = Math.max(-0.2, Math.min(1.2, cameraRotation.current.pitch)); // Limit pitch to avoid going under ground
+    const pitch = Math.max(-0.2, Math.min(1.2, cameraRotation.current.pitch));
 
     const hDist = distance * Math.cos(pitch);
     const vDist = distance * Math.sin(pitch);
@@ -76,7 +75,7 @@ const CameraController: React.FC<{
         targetVec.z + offsetZ
     );
 
-    currentPos.current.lerp(camPos, 0.15); // Smooth camera
+    currentPos.current.lerp(camPos, 0.15);
     camera.position.copy(currentPos.current);
     camera.lookAt(targetVec);
   });
@@ -93,7 +92,7 @@ const PlayerController: React.FC<{
 }> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos }) => {
   const { scene } = useThree();
   
-  // Logic position & physics
+  // State
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
   const velocity = useRef(new THREE.Vector3(0, 0, 0));
@@ -102,45 +101,39 @@ const PlayerController: React.FC<{
   
   // Raycasters
   const downRaycaster = useRef(new THREE.Raycaster());
-  const forwardRaycaster = useRef(new THREE.Raycaster()); // For wall detection
   
-  const downVector = new THREE.Vector3(0, -1, 0);
-
-  // Visual Reference
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
+  // Physics Config
   const speed = 0.15;
   const gravity = 0.02;
-  const jumpForce = 0.4; // Jump strength
+  const jumpForce = 0.4;
+  const maxStepHeight = 0.5; // Max height player can climb automatically
   const colliderName = 'ground-collider';
 
   useFrame(() => {
     const { x, y } = joystickData.current;
-    
-    // Joystick Logic
+    const mapObject = scene.getObjectByName(colliderName);
+
+    // 1. Input Handling
     const forwardInput = y; 
     const strafeInput = x;
+    const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1; // Increased threshold slightly
     
-    const isMoving = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
-    
-    // 1. Calculate Intended Movement
     let moveX = 0;
     let moveZ = 0;
 
     if (isMoving) {
       const camYaw = cameraRotation.current.yaw;
-      
       const forwardX = Math.sin(camYaw) * forwardInput;
       const forwardZ = Math.cos(camYaw) * forwardInput;
-      
       const rightX = Math.cos(camYaw) * strafeInput;
       const rightZ = -Math.sin(camYaw) * strafeInput;
 
       moveX = (forwardX + rightX) * speed;
       moveZ = (forwardZ + rightZ) * speed;
 
-      // Calculate Rotation (Face movement direction)
       if (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001) {
           const targetRotation = Math.atan2(moveX, moveZ);
           let delta = targetRotation - rotation.current;
@@ -150,18 +143,41 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Wall Collision Detection
-    const mapObject = scene.getObjectByName(colliderName);
+    // 2. WALL / COLLISION DETECTION (Future Step Prediction)
     let canMove = true;
+    let groundY = -100;
 
-    if (mapObject && isMoving) {
-        const moveDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
-        const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 1, 0));
-        forwardRaycaster.current.set(rayOrigin, moveDir);
-        forwardRaycaster.current.far = 0.6; 
+    // First, find ground height at CURRENT position
+    if (mapObject) {
+        const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
+        downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
+        const intersects = downRaycaster.current.intersectObject(mapObject, true);
+        if (intersects.length > 0) {
+            groundY = intersects[0].point.y;
+        }
+    }
+
+    if (isMoving && mapObject) {
+        // Check FUTURE position
+        const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
+        const origin = futurePos.clone().add(new THREE.Vector3(0, 5, 0)); // Cast from above
         
-        const wallIntersects = forwardRaycaster.current.intersectObject(mapObject, true);
-        if (wallIntersects.length > 0) canMove = false;
+        downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
+        const intersects = downRaycaster.current.intersectObject(mapObject, true);
+        
+        if (intersects.length > 0) {
+            const futureGroundY = intersects[0].point.y;
+            const heightDiff = futureGroundY - pos.current.y;
+
+            // FIX: If the step is too high (wall), block movement
+            // Also block if the slope is extremely steep (optional, but step height covers most walls)
+            if (heightDiff > maxStepHeight) {
+                canMove = false;
+            }
+        } else {
+            // If future pos has NO ground (cliff edge), you might want to stop or let them fall. 
+            // Letting them fall is standard.
+        }
     }
 
     if (canMove) {
@@ -169,28 +185,16 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
-    // 3. Physics & Gravity
-    let groundY = -100;
-    
-    if (mapObject) {
-        const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
-        downRaycaster.current.set(rayOrigin, downVector);
-        const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        if (intersects.length > 0) {
-            groundY = intersects[0].point.y;
-        }
-    }
-
-    // JUMP LOGIC
+    // 3. Gravity & Jumping
     if (jumpPressed.current && isGrounded.current) {
         velocity.current.y = jumpForce;
         isGrounded.current = false;
-        jumpPressed.current = false; // Reset button
+        jumpPressed.current = false;
     } else {
-        jumpPressed.current = false; // Reset if pressed mid-air
+        jumpPressed.current = false;
     }
 
-    // Apply Gravity / Vertical Movement
+    // Apply Velocity
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= gravity;
         pos.current.y += velocity.current.y;
@@ -201,25 +205,26 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
     
+    // Void reset
     if (pos.current.y < -50) {
-        pos.current.set(0, 10, 0); 
+        pos.current.set(initialPos.x, initialPos.y + 5, initialPos.z); 
         velocity.current.set(0,0,0);
     }
 
     // 4. Update Visuals
-    if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.5);
+    if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // 5. Determine Animation
+    // 5. Animation Logic (Strict)
     let newAnim = 'idle';
     if (!isGrounded.current && velocity.current.y > 0) {
         newAnim = 'jump';
     } else if (isMoving) {
-        newAnim = 'run'; // Request 'run' specifically as per user request
+        newAnim = 'run';
     }
 
-    // 6. Network Sync
-    if (animationState.current !== newAnim || (isMoving && Math.random() < 0.5) || !isGrounded.current) {
+    // 6. Network Sync (Throttled slightly)
+    if (animationState.current !== newAnim || (isMoving && Math.random() < 0.2) || !isGrounded.current) {
         animationState.current = newAnim;
         onMove(pos.current, rotation.current, animationState.current);
     }
