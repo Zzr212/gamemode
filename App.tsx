@@ -18,6 +18,7 @@ function App() {
   // Mutable refs for high-frequency updates
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.3 });
+  const jumpRef = useRef<boolean>(false);
 
   // Handle Socket Connection based on App State
   useEffect(() => {
@@ -90,6 +91,10 @@ function App() {
     cameraRotationRef.current.pitch -= dy * sensitivity;
   };
 
+  const handleJump = () => {
+    jumpRef.current = true;
+  };
+
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative select-none touch-none">
       
@@ -114,6 +119,7 @@ function App() {
                 <GameScene 
                     joystickData={joystickRef} 
                     cameraRotation={cameraRotationRef} 
+                    jumpPressed={jumpRef}
                     players={players} 
                     myId={myId}
                 />
@@ -129,7 +135,7 @@ function App() {
                     ))}
                 </div>
                 <button 
-                    className="mt-4 pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs"
+                    className="mt-4 pointer-events-auto bg-red-500/50 text-white px-3 py-1 rounded text-xs border border-red-400 hover:bg-red-500"
                     onClick={() => setAppState('MENU')}
                 >
                     Exit
@@ -138,16 +144,30 @@ function App() {
 
             {/* Controls Layer */}
             <div className="absolute inset-0 z-20 flex">
+                {/* Left: Joystick */}
                 <div className="w-1/2 h-full relative flex items-end justify-start p-12 pointer-events-none">
                     <div className="pointer-events-auto">
                         <Joystick onMove={handleJoystickMove} />
                     </div>
                 </div>
 
+                {/* Right: Look & Jump */}
                 <div className="w-1/2 h-full relative pointer-events-auto">
+                    {/* Look Area */}
                     <TouchLook onRotate={handleCameraRotate} />
-                    <div className="absolute bottom-12 right-12 text-white/30 text-sm pointer-events-none">
-                        Drag to Look
+                    
+                    {/* Jump Button - Anchored Bottom Right */}
+                    <div className="absolute bottom-12 right-12 pointer-events-auto">
+                        <button
+                            onPointerDown={handleJump}
+                            className="w-20 h-20 bg-blue-600/60 rounded-full border-4 border-blue-400 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center"
+                        >
+                            <span className="font-bold text-white tracking-wider text-sm">JUMP</span>
+                        </button>
+                    </div>
+                    
+                    <div className="absolute bottom-36 right-16 text-white/30 text-xs pointer-events-none text-center">
+                        Drag area to Look
                     </div>
                 </div>
             </div>

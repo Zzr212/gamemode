@@ -16,36 +16,28 @@ declare global {
 interface PlayerModelProps {
   position: Vector3;
   rotation: number;
-  isSelf?: boolean;
-  color?: string;
-  animation?: string; // 'idle' | 'walk'
+  animation?: string; // 'idle' | 'walk' | 'run' | 'jump'
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
   const group = useRef<THREE.Group>(null);
+  const previousAction = useRef<string>('');
   
-  // Load the GLTF
-  // Removed 'materials' from destructuring as it was unused
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
 
   // CRITICAL FIX: Use SkeletonUtils.clone() to deep clone the model including SkinnedMesh relations.
-  // This fixes the bug where "helmet stays behind" while the body moves.
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   
-  // useGraph creates a fresh object graph from the clone, needed for useAnimations to bind correctly
-  // We call usageGraph to register the graph, but we don't need 'nodes' variable right now
   useGraph(clone);
   
   // Setup Animations on the CLONED group
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => {
-    // Traverse to enable shadows and fix frustum culling issues if mesh disappears
     clone.traverse((object: any) => {
       if (object.isMesh) {
         object.castShadow = true;
         object.receiveShadow = true;
-        // Fix for models disappearing at certain angles
         object.frustumCulled = false; 
       }
     });
@@ -53,38 +45,57 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
 
   useEffect(() => {
     if (actions) {
-        // --- SMART ANIMATION MAPPING ---
-        // Instead of hardcoding keys, we search for them.
         const allActions = Object.keys(actions);
         
         // Helper to find action by name (case insensitive)
         const findAction = (query: string) => 
             allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
 
-        // 1. Find correct clips
-        const idleKey = findAction('idle') || findAction('wait') || allActions[0];
-        const runKey = findAction('run') || findAction('walk') || allActions[1];
-        
-        const currentActionName = animation === 'walk' ? runKey : idleKey;
-        const currentAction = actions[currentActionName || ''];
+        // MAPPING LOGIC
+        // 1. Jump
+        const jumpKey = findAction('jump');
+        // 2. Run / Walk (Prioritize Run if requested, but fallback to walk)
+        const runKey = findAction('run') || findAction('sprint') || findAction('walk');
+        const walkKey = findAction('walk') || findAction('run');
+        // 3. Idle
+        const idleKey = findAction('idle') || findAction('wait') || findAction('breath') || allActions[0];
 
-        // Stop all other actions to prevent mixing weirdness (like death loop)
-        allActions.forEach(key => {
-            if (key !== currentActionName && actions[key]) {
-                actions[key]?.fadeOut(0.2);
-            }
-        });
+        let targetKey = '';
 
-        if (currentAction) {
-            currentAction.reset().fadeIn(0.2).play();
-            // Ensure Idle loops, Run loops. 
-            // If you had a 'death' animation playing, it's likely because it was allActions[0] and LoopOnce.
-            currentAction.setLoop(THREE.LoopRepeat, Infinity); 
+        if (animation === 'jump' && jumpKey) {
+            targetKey = jumpKey;
+        } else if ((animation === 'run' || animation === 'walk') && runKey) {
+            targetKey = runKey;
+        } else {
+            targetKey = idleKey || '';
         }
 
-        return () => {
-            // Cleanup not strictly necessary with fadeOut logic above, but good practice
-        };
+        const currentAction = actions[targetKey];
+        
+        // Only transition if the action actually changed or if it's a jump (which needs re-triggering)
+        if (currentAction && (targetKey !== previousAction.current || animation === 'jump')) {
+            
+            // Fade out everyone else
+            allActions.forEach(key => {
+                if (key !== targetKey && actions[key]) {
+                    actions[key]?.fadeOut(0.2);
+                }
+            });
+
+            currentAction.reset().fadeIn(0.2).play();
+
+            if (animation === 'jump') {
+                currentAction.setLoop(THREE.LoopOnce, 1);
+                currentAction.clampWhenFinished = true;
+                
+                // After jump finishes, we usually want to blend back to idle/run via the parent component updating state,
+                // but setting clampWhenFinished helps it not snap back instantly.
+            } else {
+                currentAction.setLoop(THREE.LoopRepeat, Infinity);
+            }
+
+            previousAction.current = targetKey;
+        }
     }
   }, [animation, actions]);
 

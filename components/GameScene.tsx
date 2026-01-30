@@ -39,6 +39,7 @@ class ModelErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
 interface GameSceneProps {
   joystickData: React.MutableRefObject<JoystickData>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
+  jumpPressed: React.MutableRefObject<boolean>;
   players: Record<string, PlayerState>;
   myId: string | null;
 }
@@ -86,9 +87,10 @@ const CameraController: React.FC<{
 const PlayerController: React.FC<{
   joystickData: React.MutableRefObject<JoystickData>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
+  jumpPressed: React.MutableRefObject<boolean>;
   onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
-}> = ({ joystickData, cameraRotation, onMove, initialPos }) => {
+}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos }) => {
   const { scene } = useThree();
   
   // Logic position & physics
@@ -110,6 +112,7 @@ const PlayerController: React.FC<{
 
   const speed = 0.15;
   const gravity = 0.02;
+  const jumpForce = 0.4; // Jump strength
   const colliderName = 'ground-collider';
 
   useFrame(() => {
@@ -119,10 +122,8 @@ const PlayerController: React.FC<{
     const forwardInput = y; 
     const strafeInput = x;
     
-    // FIX 1: Lower threshold for movement to prevent animation flicker
     const isMoving = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
-    const newAnim = isMoving ? 'walk' : 'idle';
-
+    
     // 1. Calculate Intended Movement
     let moveX = 0;
     let moveZ = 0;
@@ -149,79 +150,75 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. FIX 3: Wall Collision Detection (Horizontal Raycast)
+    // 2. Wall Collision Detection
     const mapObject = scene.getObjectByName(colliderName);
     let canMove = true;
 
     if (mapObject && isMoving) {
-        // Create a vector for movement direction
         const moveDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
-        
-        // Raycast from chest height (y + 1) in direction of movement
         const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 1, 0));
         forwardRaycaster.current.set(rayOrigin, moveDir);
-        // Only check slightly ahead of player (0.5 units)
         forwardRaycaster.current.far = 0.6; 
         
         const wallIntersects = forwardRaycaster.current.intersectObject(mapObject, true);
-        
-        if (wallIntersects.length > 0) {
-            // Hit a wall! Stop horizontal movement.
-            canMove = false;
-            // Optional: Slide along wall logic could go here, but simple stop is safer for now.
-        }
+        if (wallIntersects.length > 0) canMove = false;
     }
 
-    // Apply Movement if no wall hit
     if (canMove) {
         pos.current.x += moveX;
         pos.current.z += moveZ;
     }
 
-    // 3. Physics & Gravity (Vertical Raycast)
-    let groundY = -100; // abyss
+    // 3. Physics & Gravity
+    let groundY = -100;
     
     if (mapObject) {
-        // Cast ray from above the player downwards
         const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
         downRaycaster.current.set(rayOrigin, downVector);
-        
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        
         if (intersects.length > 0) {
             groundY = intersects[0].point.y;
         }
     }
 
-    // Apply Gravity
-    if (pos.current.y > groundY + 0.1) {
-        // Falling
+    // JUMP LOGIC
+    if (jumpPressed.current && isGrounded.current) {
+        velocity.current.y = jumpForce;
+        isGrounded.current = false;
+        jumpPressed.current = false; // Reset button
+    } else {
+        jumpPressed.current = false; // Reset if pressed mid-air
+    }
+
+    // Apply Gravity / Vertical Movement
+    if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= gravity;
         pos.current.y += velocity.current.y;
         isGrounded.current = false;
     } else {
-        // On Ground
         velocity.current.y = 0;
         pos.current.y = groundY;
         isGrounded.current = true;
     }
     
-    // Safety net for falling through world
     if (pos.current.y < -50) {
         pos.current.set(0, 10, 0); 
         velocity.current.set(0,0,0);
     }
 
     // 4. Update Visuals
-    if (playerGroupRef.current) {
-        playerGroupRef.current.position.lerp(pos.current, 0.5);
-    }
-    if (modelRotationGroupRef.current) {
-        modelRotationGroupRef.current.rotation.y = rotation.current;
+    if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.5);
+    if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
+
+    // 5. Determine Animation
+    let newAnim = 'idle';
+    if (!isGrounded.current && velocity.current.y > 0) {
+        newAnim = 'jump';
+    } else if (isMoving) {
+        newAnim = 'run'; // Request 'run' specifically as per user request
     }
 
-    // 5. Network Sync
-    // Sync if animation changed OR if we are moving roughly every few frames
+    // 6. Network Sync
     if (animationState.current !== newAnim || (isMoving && Math.random() < 0.5) || !isGrounded.current) {
         animationState.current = newAnim;
         onMove(pos.current, rotation.current, animationState.current);
@@ -244,7 +241,7 @@ const PlayerController: React.FC<{
   );
 };
 
-export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, players, myId }) => {
+export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
   
   const handlePlayerMove = (pos: Vector3, rot: number, anim: string) => {
     socket.emit('move', pos, rot, anim);
@@ -260,10 +257,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           intensity={1.5} 
           castShadow 
           shadow-mapSize={[2048, 2048]} 
-          shadow-camera-left={-20}
-          shadow-camera-right={20}
-          shadow-camera-top={20}
-          shadow-camera-bottom={-20}
         />
         <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
         <Environment preset="city" />
@@ -288,6 +281,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
               <PlayerController 
                   joystickData={joystickData} 
                   cameraRotation={cameraRotation} 
+                  jumpPressed={jumpPressed}
                   onMove={handlePlayerMove}
                   initialPos={players[myId].position}
               />
@@ -295,12 +289,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           </ModelErrorBoundary>
         </Suspense>
       </Canvas>
-      <Loader 
-        containerStyles={{ background: 'black' }}
-        innerStyles={{ width: '50vw', height: '10px', background: '#333' }}
-        barStyles={{ height: '100%', background: '#4f46e5' }}
-        dataStyles={{ fontSize: '1.2rem', fontFamily: 'monospace', fontWeight: 'bold' }}
-      />
+      <Loader containerStyles={{ background: 'black' }} />
     </>
   );
 };
