@@ -1,7 +1,7 @@
 import React, { useRef, Suspense, Component, ReactNode, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { PerspectiveCamera, Stars, Loader, PerformanceMonitor } from '@react-three/drei';
-import { Vector3 as ThreeVector3, Group, Raycaster } from 'three';
+import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
@@ -33,11 +33,11 @@ interface GameSceneProps {
 
 // Camera follows player
 const CameraController: React.FC<{
-  targetGroup: React.RefObject<Group>;
+  targetGroup: React.RefObject<THREE.Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
 }> = ({ targetGroup, cameraRotation }) => {
   const { camera } = useThree();
-  const currentPos = useRef(new ThreeVector3(0, 10, 10)); // Start high
+  const currentPos = useRef(new THREE.Vector3(0, 10, 10)); // Start high
 
   useFrame(() => {
     if (!targetGroup.current) return;
@@ -56,10 +56,10 @@ const CameraController: React.FC<{
     const offsetX = Math.sin(yaw) * hDist;
     const offsetZ = Math.cos(yaw) * hDist;
 
-    const targetVec = new ThreeVector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
+    const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
     
     // Smooth lerp for camera
-    currentPos.current.lerp(new ThreeVector3(
+    currentPos.current.lerp(new THREE.Vector3(
         targetVec.x + offsetX, 
         targetVec.y + height + vDist, 
         targetVec.z + offsetZ
@@ -82,16 +82,16 @@ const PlayerController: React.FC<{
 }> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos }) => {
   const { scene } = useThree();
   
-  const pos = useRef(new ThreeVector3(initialPos.x, initialPos.y, initialPos.z));
+  const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
   const rotation = useRef(0);
-  const velocity = useRef(new ThreeVector3(0, 0, 0));
+  const velocity = useRef(new THREE.Vector3(0, 0, 0));
   const animationState = useRef('idle');
   const isGrounded = useRef(false);
   
   // Raycaster
-  const downRaycaster = useRef(new Raycaster());
-  const playerGroupRef = useRef<Group>(null);
-  const modelRotationGroupRef = useRef<Group>(null);
+  const downRaycaster = useRef(new THREE.Raycaster());
+  const playerGroupRef = useRef<THREE.Group>(null);
+  const modelRotationGroupRef = useRef<THREE.Group>(null);
 
   // Constants
   const SPEED = 0.15;
@@ -134,8 +134,8 @@ const PlayerController: React.FC<{
 
     // Check CURRENT ground
     if (mapObject) {
-        const origin = pos.current.clone().add(new ThreeVector3(0, 5, 0));
-        downRaycaster.current.set(origin, new ThreeVector3(0, -1, 0));
+        const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
+        downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
         if (intersects.length > 0) {
             groundY = intersects[0].point.y;
@@ -146,10 +146,10 @@ const PlayerController: React.FC<{
     let allowMove = true;
     
     if (isMoving && mapObject) {
-        const futurePos = pos.current.clone().add(new ThreeVector3(moveX, 0, moveZ));
-        const futureOrigin = futurePos.clone().add(new ThreeVector3(0, 5, 0));
+        const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
+        const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 5, 0));
         
-        downRaycaster.current.set(futureOrigin, new ThreeVector3(0, -1, 0));
+        downRaycaster.current.set(futureOrigin, new THREE.Vector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
         
         if (intersects.length > 0) {

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import { useGraph, ThreeElements } from '@react-three/fiber';
 import { Vector3 } from '../types';
-import { Group, LoopOnce, LoopRepeat, Mesh, AnimationAction } from 'three';
+import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 
 declare global {
@@ -18,7 +18,7 @@ interface PlayerModelProps {
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
-  const group = useRef<Group>(null);
+  const group = useRef<THREE.Group>(null);
   const previousAction = useRef<string>('');
   
   const { scene, animations } = useGLTF('/models/character.gltf') as any;
@@ -86,10 +86,10 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             currentAction.reset().fadeIn(0.2).play();
 
             if (animation === 'jump') {
-                currentAction.setLoop(LoopOnce, 1);
+                currentAction.setLoop(THREE.LoopOnce, 1);
                 currentAction.clampWhenFinished = true;
             } else {
-                currentAction.setLoop(LoopRepeat, Infinity);
+                currentAction.setLoop(THREE.LoopRepeat, Infinity);
             }
 
             previousAction.current = targetName;

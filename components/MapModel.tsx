@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { ThreeElements } from '@react-three/fiber';
-import { DoubleSide } from 'three';
+import * as THREE from 'three';
 
 declare global {
   namespace JSX {
@@ -23,7 +23,7 @@ export const MapModel: React.FC = () => {
                 child.receiveShadow = true;
                 // Important: Ensure material is compatible with lighting
                 if (child.material) {
-                    child.material.side = DoubleSide; 
+                    child.material.side = THREE.DoubleSide; 
                 }
             }
         });
