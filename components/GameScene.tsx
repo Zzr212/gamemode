@@ -45,17 +45,15 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
     if (groupRef.current) {
         groupRef.current.position.set(data.position.x, data.position.y, data.position.z);
     }
-  }, []); // Only on mount
+  }, []); 
 
   useFrame((_, delta) => {
     if (groupRef.current) {
       // 1. Position Interpolation (Lerp)
-      // IMPORTANT: We use the ref for position to allow smooth interpolation.
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       
-      // Dynamic lerp factor: move faster if far away (teleport prevention)
       const distance = groupRef.current.position.distanceTo(targetPos);
-      const lerpFactor = distance > 2 ? 0.5 : 10 * delta; // Snap if too far, smooth if close
+      const lerpFactor = distance > 3 ? 1 : 12 * delta; 
       
       groupRef.current.position.lerp(targetPos, lerpFactor);
 
@@ -72,7 +70,6 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   });
 
   return (
-    // DO NOT pass position={[...]} here, it causes the teleport/stutter bug!
     <group ref={groupRef}>
       <PlayerModel 
         position={{x:0, y:0, z:0}} 
@@ -83,58 +80,89 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   );
 };
 
-// --- CAMERA CONTROLLER ---
+// --- CAMERA CONTROLLER (Advanced Third Person with Collision) ---
 const CameraController: React.FC<{
   targetGroup: React.RefObject<THREE.Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
 }> = ({ targetGroup, cameraRotation }) => {
-  const { camera } = useThree();
+  const { camera, scene } = useThree();
   const currentPos = useRef(new THREE.Vector3(0, 10, 10));
+  const raycaster = useRef(new THREE.Raycaster());
 
   useFrame(() => {
     if (!targetGroup.current) return;
 
-    const targetPosition = targetGroup.current.position;
+    const playerPos = targetGroup.current.position;
     
-    // CAMERA SETTINGS
-    const distance = 7; // Distance from player
-    const height = 3;   // Height offset relative to player
-    const shoulderOffset = 2.0; // Positive = Camera moves Right (Player looks Left)
-
-    // Yaw: Rotation around Y (Left/Right)
+    // Config
+    const maxDistance = 7;
+    const minDistance = 2; // Closest camera can get to player
+    const playerHeight = 1.5; // Origin of look (Head level)
+    
+    // Yaw/Pitch from inputs
     const yaw = cameraRotation.current.yaw;
-    // Pitch: Rotation Up/Down. 
-    const pitch = Math.max(-1.2, Math.min(1.5, cameraRotation.current.pitch));
+    const pitch = Math.max(-1.4, Math.min(1.4, cameraRotation.current.pitch)); // Full freedom up/down
 
-    // Spherical coordinates calculation
-    const hDist = distance * Math.cos(pitch);
-    const vDist = distance * Math.sin(pitch);
-
-    // Standard orbit position (behind player)
+    // 1. Calculate ideal relative position based on spherical coordinates
+    // "Orbit" around 0,0,0
+    const hDist = maxDistance * Math.cos(pitch);
+    const vDist = maxDistance * Math.sin(pitch);
     const orbitX = Math.sin(yaw) * hDist;
     const orbitZ = Math.cos(yaw) * hDist;
 
-    // Shoulder Offset Vector (Perpendicular to look direction)
-    const offsetX = Math.cos(yaw) * shoulderOffset;
-    const offsetZ = -Math.sin(yaw) * shoulderOffset;
-
-    // Calculate Target Camera Position
-    const finalCamX = targetPosition.x + orbitX + offsetX;
-    const finalCamZ = targetPosition.z + orbitZ + offsetZ;
+    // 2. Define origin (Player Head)
+    const origin = new THREE.Vector3(playerPos.x, playerPos.y + playerHeight, playerPos.z);
     
-    // Calculate Height
-    let finalCamY = targetPosition.y + height + vDist;
-    
-    // FLOOR CLAMP: Prevent camera from going underground
-    finalCamY = Math.max(0.5, finalCamY);
+    // 3. Define Ideal Camera Position (without collision)
+    const idealPos = new THREE.Vector3(
+        origin.x + orbitX,
+        origin.y + vDist,
+        origin.z + orbitZ
+    );
 
-    const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
+    // 4. Collision Detection (Raycast from Head to IdealPos)
+    const direction = new THREE.Vector3().subVectors(idealPos, origin).normalize();
+    raycaster.current.set(origin, direction);
     
-    // Smooth Camera Movement
-    currentPos.current.lerp(new THREE.Vector3(finalCamX, finalCamY, finalCamZ), 0.2);
+    // Find map object to collide with
+    const mapObject = scene.getObjectByName('ground-collider');
+    let finalDistance = maxDistance;
 
+    if (mapObject) {
+        const intersects = raycaster.current.intersectObject(mapObject, true);
+        // If we hit something between player and ideal camera position
+        if (intersects.length > 0 && intersects[0].distance < maxDistance) {
+            // Pull camera in slightly in front of the wall (buffer 0.2)
+            finalDistance = Math.max(minDistance, intersects[0].distance - 0.2);
+        }
+    }
+
+    // 5. Recalculate Camera Position with safe distance
+    // We scale the vector from origin by the safe distance
+    const safePos = origin.clone().add(direction.multiplyScalar(finalDistance));
+
+    // Smoothly move camera there
+    currentPos.current.lerp(safePos, 0.3);
     camera.position.copy(currentPos.current);
-    camera.lookAt(targetVec);
+
+    // 6. Look At Logic (Offset for Crosshair)
+    // To have the Crosshair (Screen Center) point at an enemy, the Camera must look at the "Aim Point".
+    // To have the Character on the LEFT, we must look at a point to the RIGHT of the character.
+    
+    // Calculate Right Vector relative to camera yaw
+    const rightDir = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    
+    // Look Target Offset
+    const lookOffsetRight = 2.0; // Pushes character left
+    const lookOffsetUp = 0.5;    // Pushes character down slightly (Crosshair goes up)
+
+    const targetLookAt = new THREE.Vector3(
+        origin.x + (rightDir.x * lookOffsetRight),
+        origin.y + lookOffsetUp,
+        origin.z + (rightDir.z * lookOffsetRight)
+    );
+
+    camera.lookAt(targetLookAt);
   });
 
   return null;
@@ -196,7 +224,7 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Physics & Collision (Simplified)
+    // 2. Physics & Collision
     let groundY = -100;
     if (mapObject) {
         const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
@@ -205,7 +233,6 @@ const PlayerController: React.FC<{
         if (intersects.length > 0) groundY = intersects[0].point.y;
     }
 
-    // Gap Protection
     let allowMove = true;
     if (isMoving && mapObject) {
         const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
@@ -224,7 +251,6 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
-    // Gravity
     if (jumpPressed.current && isGrounded.current) {
         velocity.current.y = JUMP_FORCE;
         isGrounded.current = false;
@@ -257,7 +283,6 @@ const PlayerController: React.FC<{
     if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
     else if (isMoving) newAnim = 'Run';
 
-    // IMPORTANT: Check change BEFORE updating the ref to ensure we trigger the network send
     const animChanged = animationRef.current !== newAnim;
 
     if (animChanged) {
@@ -265,9 +290,7 @@ const PlayerController: React.FC<{
         setVisualAnimation(newAnim);
     }
 
-    // 3. Network Optimization
     const now = Date.now();
-    // Send if time elapsed OR animation actually changed in this frame
     const shouldSend = (now - lastSendTime.current > 50) || animChanged;
     
     if (shouldSend) {

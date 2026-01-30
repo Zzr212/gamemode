@@ -50,29 +50,28 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   useEffect(() => {
     if (actions) {
         const allActions = Object.keys(actions);
-        // console.log("Available animations on model:", allActions); // Uncomment to debug
-
-        // Helper: Find matching action key case-insensitively
+        
+        // Robust case-insensitive matcher
         const getActionKey = (query: string) => {
-             // 1. Exact match
-             if (actions[query]) return query;
-             // 2. Case insensitive match
-             const found = allActions.find(key => key.toLowerCase() === query.toLowerCase());
-             if (found) return found;
-             // 3. Partial match (e.g. "Armature|Run" matches "Run")
-             const partial = allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
+             const lowerQuery = query.toLowerCase();
+             // 1. Check exact or lowercase match
+             const exact = allActions.find(key => key.toLowerCase() === lowerQuery);
+             if (exact) return exact;
+             
+             // 2. Check partial match (e.g. "Armature|Run" matches "run")
+             const partial = allActions.find(key => key.toLowerCase().includes(lowerQuery));
              return partial;
         };
 
         // Determine target action based on prop
         let targetKey: string | undefined = undefined;
 
-        if (animation === 'Run') {
+        if (animation.toLowerCase() === 'run') {
             targetKey = getActionKey('Run') || getActionKey('Sprint') || getActionKey('Walk');
-        } else if (animation === 'Jump') {
+        } else if (animation.toLowerCase() === 'jump') {
             targetKey = getActionKey('Jump');
         } else {
-            targetKey = getActionKey('Idle') || getActionKey('Stand');
+            targetKey = getActionKey('Idle') || getActionKey('Stand') || getActionKey('Wait');
         }
 
         // Fallback: If no match found, use the first available animation
@@ -84,8 +83,8 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             const currentAction = actions[targetKey];
             const prevKey = previousAction.current;
 
-            // Fix TS18047: Ensure currentAction is not null before using it
-            if (currentAction && (targetKey !== prevKey || animation === 'Jump')) {
+            // Only transition if the animation key changed OR if it's a jump (which needs reset)
+            if (currentAction && (targetKey !== prevKey || animation.toLowerCase() === 'jump')) {
                 
                 // Fade out all other actions
                 allActions.forEach(key => {
@@ -97,7 +96,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
                 // Play new action
                 currentAction.reset().fadeIn(0.2).play();
 
-                if (animation === 'Jump') {
+                if (animation.toLowerCase() === 'jump') {
                     currentAction.setLoop(THREE.LoopOnce, 1);
                     currentAction.clampWhenFinished = true;
                 } else {
