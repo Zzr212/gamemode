@@ -1,6 +1,6 @@
 import React, { useRef, Suspense, Component, ReactNode, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { PerspectiveCamera, Stars, Loader, PerformanceMonitor } from '@react-three/drei';
+import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3 } from '../types';
 import { PlayerModel } from './PlayerModel';
@@ -36,19 +36,63 @@ interface GameSceneProps {
   myId: string | null;
 }
 
-// Camera follows player
+// --- REMOTE PLAYER COMPONENT (Interpolation Logic) ---
+// This handles smoothing out the movement of other players so they don't teleport.
+const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
+  const groupRef = useRef<THREE.Group>(null);
+  
+  // We keep a reference to the current animation to avoid passing unstable props
+  // However, we pass data.animation directly to PlayerModel which handles the blending.
+  
+  useFrame((state, delta) => {
+    if (groupRef.current) {
+      // 1. Position Interpolation (Lerp)
+      // Smoothly move from current position to target position (data.position)
+      // Factor 10 * delta gives a quick but smooth catch-up
+      const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
+      groupRef.current.position.lerp(targetPos, 12 * delta);
+
+      // 2. Rotation Interpolation
+      // Smoothly rotate towards target rotation
+      let currentRot = groupRef.current.rotation.y;
+      let targetRot = data.rotation;
+      
+      // Shortest path rotation logic
+      let diff = targetRot - currentRot;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      
+      groupRef.current.rotation.y += diff * 10 * delta;
+    }
+  });
+
+  return (
+    <group ref={groupRef} position={[data.position.x, data.position.y, data.position.z]}>
+      {/* 
+         We render PlayerModel at 0,0,0 inside this interpolated group. 
+         We pass the animation state directly from the server data.
+      */}
+      <PlayerModel 
+        position={{x:0, y:0, z:0}} 
+        rotation={0} 
+        animation={data.animation} 
+      />
+    </group>
+  );
+};
+
+// --- CAMERA CONTROLLER ---
 const CameraController: React.FC<{
   targetGroup: React.RefObject<THREE.Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
 }> = ({ targetGroup, cameraRotation }) => {
   const { camera } = useThree();
-  const currentPos = useRef(new THREE.Vector3(0, 10, 10)); // Start high
+  const currentPos = useRef(new THREE.Vector3(0, 10, 10));
 
   useFrame(() => {
     if (!targetGroup.current) return;
 
     const targetPosition = targetGroup.current.position;
-    // Lower distance for performance, closer feel
     const distance = 8;
     const height = 4;
 
@@ -63,7 +107,6 @@ const CameraController: React.FC<{
 
     const targetVec = new THREE.Vector3(targetPosition.x, targetPosition.y + 1.5, targetPosition.z);
     
-    // Smooth lerp for camera
     currentPos.current.lerp(new THREE.Vector3(
         targetVec.x + offsetX, 
         targetVec.y + height + vDist, 
@@ -77,7 +120,7 @@ const CameraController: React.FC<{
   return null;
 };
 
-// Physics & Logic
+// --- PLAYER CONTROLLER (Local Physics) ---
 const PlayerController: React.FC<{
   joystickData: React.MutableRefObject<JoystickData>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
@@ -91,19 +134,15 @@ const PlayerController: React.FC<{
   const rotation = useRef(0);
   const velocity = useRef(new THREE.Vector3(0, 0, 0));
   const isGrounded = useRef(false);
+  const lastSendTime = useRef(0);
   
-  // Animation State Management
-  // animationRef is for logic checks inside useFrame (instant access)
   const animationRef = useRef('Idle');
-  // visualAnimation is for React render cycle (triggers prop update on child)
   const [visualAnimation, setVisualAnimation] = useState('Idle');
   
-  // Raycaster
   const downRaycaster = useRef(new THREE.Raycaster());
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
-  // Constants
   const SPEED = 0.15;
   const GRAVITY = 0.02;
   const JUMP_FORCE = 0.4;
@@ -113,14 +152,13 @@ const PlayerController: React.FC<{
     const { x, y } = joystickData.current;
     const mapObject = scene.getObjectByName(COLLIDER_NAME);
 
-    // 1. Calculate Intended Move
+    // 1. Movement Logic
     const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1;
     let moveX = 0;
     let moveZ = 0;
 
     if (isMoving) {
       const camYaw = cameraRotation.current.yaw;
-      // Rotate input based on camera
       const forwardX = Math.sin(camYaw) * y;
       const forwardZ = Math.cos(camYaw) * y;
       const rightX = Math.cos(camYaw) * x;
@@ -129,7 +167,6 @@ const PlayerController: React.FC<{
       moveX = (forwardX + rightX) * SPEED;
       moveZ = (forwardZ + rightZ) * SPEED;
 
-      // Rotation
       if (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001) {
           const targetRotation = Math.atan2(moveX, moveZ);
           let delta = targetRotation - rotation.current;
@@ -139,40 +176,26 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. PHYSICS & COLLISION
-    let groundY = -100; // Default floor (void)
-
-    // Check CURRENT ground
+    // 2. Physics & Collision (Simplified)
+    let groundY = -100;
     if (mapObject) {
         const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
         downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        if (intersects.length > 0) {
-            groundY = intersects[0].point.y;
-        }
+        if (intersects.length > 0) groundY = intersects[0].point.y;
     }
 
-    // Check FUTURE ground (Gap Protection)
+    // Gap Protection
     let allowMove = true;
-    
     if (isMoving && mapObject) {
         const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
         const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 5, 0));
-        
         downRaycaster.current.set(futureOrigin, new THREE.Vector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        
         if (intersects.length > 0) {
-            const futureGroundY = intersects[0].point.y;
-            const heightDiff = futureGroundY - pos.current.y;
-            
-            // Wall check: Too high to step up
-            if (heightDiff > 0.6) allowMove = false;
-        } else {
-            // GAP DETECTED
-            if (isGrounded.current) {
-                allowMove = false; 
-            }
+            if (intersects[0].point.y - pos.current.y > 0.6) allowMove = false;
+        } else if (isGrounded.current) {
+            allowMove = false; 
         }
     }
 
@@ -181,7 +204,7 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
-    // 3. Gravity
+    // Gravity
     if (jumpPressed.current && isGrounded.current) {
         velocity.current.y = JUMP_FORCE;
         isGrounded.current = false;
@@ -200,33 +223,33 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
 
-    // Void reset
     if (pos.current.y < -20) {
-        // Respawn in air if fallen
         pos.current.y = 10;
         velocity.current.set(0,0,0);
     }
 
-    // 4. Update Refs
+    // Update Visuals
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // 5. Animation Calculation
+    // Animation
     let newAnim = 'Idle';
     if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
     else if (isMoving) newAnim = 'Run';
 
-    // 6. State Sync & Network Logic
-    
-    // Check if animation changed locally
     if (animationRef.current !== newAnim) {
         animationRef.current = newAnim;
-        setVisualAnimation(newAnim); // Force React Re-render so PlayerModel gets new prop!
-        onMove(pos.current, rotation.current, newAnim); // Send new animation immediately
-    } 
-    // If animation is same, but we are moving, sync position periodically (throttled)
-    else if (isMoving && Math.random() < 0.1) {
+        setVisualAnimation(newAnim);
+    }
+
+    // 3. Network Optimization
+    // Send update only every 50ms OR if animation changed critically
+    const now = Date.now();
+    const shouldSend = (now - lastSendTime.current > 50) || (animationRef.current !== newAnim);
+    
+    if (shouldSend) {
         onMove(pos.current, rotation.current, animationRef.current);
+        lastSendTime.current = now;
     }
   });
 
@@ -234,7 +257,6 @@ const PlayerController: React.FC<{
     <>
       <group ref={playerGroupRef} position={[initialPos.x, initialPos.y, initialPos.z]}>
           <group ref={modelRotationGroupRef}>
-             {/* We pass visualAnimation (state) here, not the ref. This ensures re-render. */}
              <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
           </group>
       </group>
@@ -243,6 +265,7 @@ const PlayerController: React.FC<{
   );
 };
 
+// --- MAIN GAME SCENE ---
 export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
   const [dpr, setDpr] = useState(1.5); 
 
@@ -254,46 +277,51 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
     <>
       <Canvas 
         dpr={dpr} 
-        gl={{ antialias: false, powerPreference: 'high-performance' }} 
+        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.8 }} 
+        shadows
       >
         <PerformanceMonitor 
              onIncline={() => setDpr(1.5)} 
              onDecline={() => setDpr(1)} 
         />
 
-        {/* DEFAULT CAMERA: Used when player is not yet loaded or myId is null */}
-        {/* Placed high up (y=20) looking down at center */}
-        <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={60} onUpdate={c => c.lookAt(0, 0, 0)}/>
+        <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={100} onUpdate={c => c.lookAt(0, 0, 0)}/>
 
-        <fog attach="fog" args={['#000', 30, 50]} />
+        {/* 4. Visuals: Day & Fog */}
+        {/* White fog for distance, matches sky */}
+        <fog attach="fog" args={['#eefbff', 20, 80]} />
+        <color attach="background" args={['#eefbff']} />
 
-        <ambientLight intensity={0.7} />
+        {/* Daylight Lighting */}
+        <ambientLight intensity={0.6} />
         <directionalLight 
-          position={[20, 30, 10]} 
-          intensity={1.2} 
+          position={[50, 80, 30]} 
+          intensity={1.5} 
           castShadow 
-          shadow-mapSize={[1024, 1024]} 
+          shadow-mapSize={[2048, 2048]} 
           shadow-bias={-0.0001}
         />
-        
-        <Stars radius={40} depth={20} count={2000} factor={3} fade />
+
+        {/* Sky with Clouds (Day effect) */}
+        <Sky 
+            sunPosition={[100, 20, 100]} 
+            turbidity={0.5} 
+            rayleigh={0.5} 
+            mieCoefficient={0.005} 
+            mieDirectionalG={0.8} 
+        />
         
         <Suspense fallback={null}>
           <ModelErrorBoundary>
             <MapModel />
 
+            {/* Render Other Players using RemotePlayer for interpolation */}
             {Object.values(players).map((p) => {
               if (p.id === myId) return null;
-              return (
-                  <PlayerModel 
-                      key={p.id} 
-                      position={p.position} 
-                      rotation={p.rotation} 
-                      animation={p.animation}
-                  />
-              );
+              return <RemotePlayer key={p.id} data={p} />;
             })}
 
+            {/* Render Local Player */}
             {myId && players[myId] && (
               <PlayerController 
                   joystickData={joystickData} 
