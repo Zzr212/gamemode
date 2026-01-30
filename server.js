@@ -17,38 +17,37 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3000;
+const MAX_PLAYERS = 20;
 
 // State
 const players = {};
 // Queue State
 const loginQueue = [];
-let isProcessingQueue = false;
 
-// Queue Processor loop
-const processQueue = async () => {
-    if (isProcessingQueue) return;
-    isProcessingQueue = true;
-
-    // Process one player every 1.5 seconds
-    const interval = setInterval(() => {
-        if (loginQueue.length > 0) {
-            const socketId = loginQueue.shift(); // Get first in line
+// Real Queue Processor
+const manageQueue = () => {
+    const currentCount = Object.keys(players).length;
+    
+    if (currentCount < MAX_PLAYERS && loginQueue.length > 0) {
+        const slotsAvailable = MAX_PLAYERS - currentCount;
+        
+        for (let i = 0; i < slotsAvailable; i++) {
+            if (loginQueue.length === 0) break;
+            
+            const socketId = loginQueue.shift();
             if (socketId) {
                 const socket = io.sockets.sockets.get(socketId);
                 if (socket) {
                     socket.emit('loginAllowed');
                 }
             }
-            // Update positions for everyone else
-            loginQueue.forEach((sid, index) => {
-                const s = io.sockets.sockets.get(sid);
-                if (s) s.emit('queueUpdate', index + 1);
-            });
-        } else {
-            clearInterval(interval);
-            isProcessingQueue = false;
         }
-    }, 1500);
+        
+        loginQueue.forEach((sid, index) => {
+            const s = io.sockets.sockets.get(sid);
+            if (s) s.emit('queueUpdate', index + 1);
+        });
+    }
 };
 
 // Socket Logic
@@ -59,11 +58,11 @@ io.on('connection', (socket) => {
   loginQueue.push(socket.id);
   socket.emit('queueUpdate', loginQueue.length);
   
-  if (!isProcessingQueue) processQueue();
+  // 2. Try enter
+  manageQueue();
 
-  // 2. Wait for Spawn Request
+  // 3. Spawn
   socket.on('spawn', () => {
-      // Create new player
       const randomX = (Math.random() - 0.5) * 40; 
       const randomZ = (Math.random() - 0.5) * 40;
 
@@ -77,6 +76,7 @@ io.on('connection', (socket) => {
 
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
+      manageQueue();
   });
 
   socket.on('move', (position, rotation, animation) => {
@@ -104,6 +104,9 @@ io.on('connection', (socket) => {
         delete players[socket.id];
         io.emit('playerDisconnected', socket.id);
     }
+    
+    // Slot opened
+    manageQueue();
   });
 });
 

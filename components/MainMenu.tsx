@@ -1,6 +1,6 @@
 import React, { Suspense, useRef, useState } from 'react';
-import { Canvas, ThreeElements, useFrame } from '@react-three/fiber';
-import { Environment, Float, ContactShadows, SpotLight, Text } from '@react-three/drei';
+import { Canvas, ThreeElements, useFrame, ThreeEvent } from '@react-three/fiber';
+import { Environment, ContactShadows, SpotLight, Text } from '@react-three/drei';
 import { PlayerModel } from './PlayerModel';
 import * as THREE from 'three';
 
@@ -46,7 +46,7 @@ const PlayHologram: React.FC<{ onClick: () => void }> = ({ onClick }) => {
         <group 
             ref={groupRef} 
             position={[-1.2, 1.8, 0]} // Left of the head
-            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); onClick(); }}
             onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered(true); }}
             onPointerOut={() => { document.body.style.cursor = 'auto'; setHovered(false); }}
         >
