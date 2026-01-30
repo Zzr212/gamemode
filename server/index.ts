@@ -20,51 +20,53 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
+// FILE SYSTEM PATHS
 const DATA_FILE = path.join(__dirname, 'spawn_config.json');
+
+// GLOBAL STATE
 let globalSpawnPoint: Vector3 = { x: 0, y: 5, z: 0 };
+const players: Record<string, PlayerState> = {};
 
-// LOAD SPAWN
-const loadSpawn = () => {
-    try {
-        if (fs.existsSync(DATA_FILE)) {
-            const rawData = fs.readFileSync(DATA_FILE, 'utf-8');
-            globalSpawnPoint = JSON.parse(rawData);
-            console.log('✅ Spawn loaded:', globalSpawnPoint);
+// 1. LOAD SPAWN ON STARTUP (Sync to ensure it's ready before anyone connects)
+try {
+    if (fs.existsSync(DATA_FILE)) {
+        const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.x === 'number') {
+            globalSpawnPoint = parsed;
+            console.log('✅ Spawn Point Loaded from Disk:', globalSpawnPoint);
         }
-    } catch (e) {
-        console.error('Spawn load error:', e);
+    } else {
+        console.log('⚠️ No spawn file found, using default (0,5,0)');
+        // Create default file
+        fs.writeFileSync(DATA_FILE, JSON.stringify(globalSpawnPoint));
     }
-};
+} catch (e) {
+    console.error('❌ Error loading spawn config:', e);
+}
 
-loadSpawn();
-
-// SAVE SPAWN
-const saveSpawnPointToDisk = (pos: Vector3) => {
+// HELPER: Save Spawn
+const saveSpawn = (pos: Vector3) => {
+    globalSpawnPoint = pos;
     try {
         fs.writeFileSync(DATA_FILE, JSON.stringify(pos, null, 2));
-        console.log('💾 Spawn saved:', pos);
-    } catch (error) {
-        console.error('Error saving spawn:', error);
+        console.log('💾 Spawn Point Saved:', pos);
+    } catch (e) {
+        console.error('Error saving spawn:', e);
     }
 };
-
-const players: Record<string, PlayerState> = {};
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // IMPORTANT: Reload from disk/memory to ensure fresh data for new connection
-  socket.emit('spawnPointUpdated', globalSpawnPoint);
-  socket.emit('currentPlayers', players);
-
+  // 2. CREATE PLAYER AT SPAWN POINT IMMEDIATELY
   const spawnOffset = {
-      x: (Math.random() - 0.5) * 2,
+      x: (Math.random() - 0.5) * 2, // Random spread +/- 1m
       z: (Math.random() - 0.5) * 2
   };
 
   players[socket.id] = {
     id: socket.id,
-    // Use the CURRENT globalSpawnPoint
     position: { 
         x: globalSpawnPoint.x + spawnOffset.x, 
         y: globalSpawnPoint.y, 
@@ -72,11 +74,21 @@ io.on('connection', (socket) => {
     },
     rotation: 0,
     animation: 'idle',
-    color: '#' + Math.floor(Math.random()*16777215).toString(16)
+    color: '#ffffff'
   };
 
+  // 3. SEND STATE TO CLIENT
+  // Send the player their OWN ID so they know who they are immediately
+  socket.emit('connectionData', { 
+      id: socket.id,
+      spawnPoint: globalSpawnPoint,
+      players: players
+  });
+
+  // Notify others
   socket.broadcast.emit('newPlayer', players[socket.id]);
 
+  // MOVEMENT
   socket.on('move', (position, rotation, animation) => {
     if (players[socket.id]) {
       players[socket.id].position = position;
@@ -86,14 +98,11 @@ io.on('connection', (socket) => {
     }
   });
 
+  // EDITOR: UPDATE SPAWN
   socket.on('updateSpawnPoint', (pos: Vector3) => {
-      globalSpawnPoint = pos;
-      saveSpawnPointToDisk(globalSpawnPoint);
-      io.emit('spawnPointUpdated', globalSpawnPoint);
-  });
-  
-  socket.on('requestSpawnPoint', () => {
-      socket.emit('spawnPointUpdated', globalSpawnPoint);
+      console.log(`Editor (User ${socket.id}) updated spawn to:`, pos);
+      saveSpawn(pos);
+      io.emit('spawnPointUpdated', pos); // Notify everyone (e.g. other editors)
   });
 
   socket.on('disconnect', () => {
@@ -103,6 +112,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// STATIC FILES
 const distPath = path.resolve(__dirname, process.env.NODE_ENV === 'production' ? '../../dist' : '../dist');
 app.use('/', express.static(distPath) as any);
 

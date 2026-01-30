@@ -15,7 +15,7 @@ declare global {
 interface PlayerModelProps {
   position: Vector3;
   rotation: number;
-  animation?: string; // 'idle' | 'walk' | 'run' | 'jump'
+  animation?: string; // 'idle' | 'run' | 'jump'
 }
 
 export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, animation = 'idle' }) => {
@@ -36,6 +36,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
       if (object.isMesh) {
         object.castShadow = true;
         object.receiveShadow = true;
+        // Optimization: Disable frustum culling for animated meshes to prevent flickering at edges
         object.frustumCulled = false; 
       }
     });
@@ -44,44 +45,42 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   // ANIMATION LOGIC
   useEffect(() => {
     if (actions) {
-        const allActions = Object.keys(actions);
+        // EXACT NAMES FROM YOUR SCREENSHOT:
+        // "Run", "Idle", "Jump", "Walk"
         
-        // DEBUG: Print animations to console so user can verify names
-        // Check your browser console to see what your model actually has!
-        // console.log("Available Animations:", allActions);
+        const actionNames = {
+            idle: 'Idle',
+            run: 'Run',
+            jump: 'Jump',
+            walk: 'Walk'
+        };
 
-        // Helper: Case insensitive partial match
-        const findAction = (query: string) => 
-            allActions.find(key => key.toLowerCase().includes(query.toLowerCase()));
+        // Determine which animation to play based on prop
+        let targetName = actionNames.idle; // Default
 
-        // MAPPING
-        const jumpKey = findAction('jump');
-        
-        // Fix: Broaden search for run. Look for 'run', 'sprint', 'fast', or fallback to 'walk'.
-        const runKey = findAction('run') || findAction('sprint') || findAction('fast') || findAction('walk') || findAction('move');
-        
-        const idleKey = findAction('idle') || findAction('wait') || findAction('stand') || allActions[0];
-
-        let targetKey = '';
-
-        if (animation === 'jump' && jumpKey) {
-            targetKey = jumpKey;
-        } else if (animation === 'run') {
-            // Explicitly requested run
-            targetKey = runKey || idleKey || '';
-        } else {
-            // Default to idle
-            targetKey = idleKey || '';
+        if (animation === 'run') {
+            targetName = actionNames.run;
+        } else if (animation === 'jump') {
+            targetName = actionNames.jump;
+        } else if (animation === 'walk') {
+            targetName = actionNames.walk;
         }
 
-        const currentAction = actions[targetKey];
+        // Fallback checks if exact name doesn't exist (safety)
+        if (!actions[targetName]) {
+             // Try case-insensitive search if "Run" isn't found
+             const found = Object.keys(actions).find(key => key.toLowerCase() === animation.toLowerCase());
+             if (found) targetName = found;
+        }
+
+        const currentAction = actions[targetName];
         
-        if (currentAction && (targetKey !== previousAction.current || animation === 'jump')) {
+        if (currentAction && (targetName !== previousAction.current || animation === 'jump')) {
             
-            // Fade out others
-            allActions.forEach(key => {
-                if (key !== targetKey && actions[key]) {
-                    actions[key]?.fadeOut(0.2);
+            // Fade out all other actions
+            Object.values(actions).forEach((action: any) => {
+                if (action !== currentAction) {
+                    action.fadeOut(0.2);
                 }
             });
 
@@ -94,7 +93,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
                 currentAction.setLoop(THREE.LoopRepeat, Infinity);
             }
 
-            previousAction.current = targetKey;
+            previousAction.current = targetName;
         }
     }
   }, [animation, actions]);
@@ -102,9 +101,10 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   return (
     <group ref={group} position={[position.x, position.y, position.z]} rotation={[0, rotation, 0]}>
       <primitive object={clone} scale={1} />
+      {/* Shadow Blob for weak devices instead of real shadow if needed */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
-        <circleGeometry args={[0.5, 32]} />
-        <meshBasicMaterial color="#000000" opacity={0.4} transparent />
+        <circleGeometry args={[0.5, 16]} />
+        <meshBasicMaterial color="#000000" opacity={0.3} transparent depthWrite={false} />
       </mesh>
     </group>
   );
