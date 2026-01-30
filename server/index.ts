@@ -18,55 +18,54 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3000;
-const MAX_PLAYERS = 20; // Real limit for server capacity
 
 // Game State
 const players: Record<string, PlayerState> = {};
 // Queue State
 const loginQueue: string[] = [];
+let isProcessingQueue = false;
 
-// Real Queue Processor (Event Driven, No Interval)
-const manageQueue = () => {
-    // Count current active players
-    const currentCount = Object.keys(players).length;
-    
-    // Check if we have space
-    if (currentCount < MAX_PLAYERS && loginQueue.length > 0) {
-        // How many slots are open?
-        const slotsAvailable = MAX_PLAYERS - currentCount;
-        
-        // Let that many people in from the front of the queue
-        for (let i = 0; i < slotsAvailable; i++) {
-            if (loginQueue.length === 0) break;
-            
-            const socketId = loginQueue.shift(); // Remove from queue
+// Queue Processor loop
+const processQueue = async () => {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    // Process one player every 1.5 seconds to prevent spawn overlapping/lag
+    const interval = setInterval(() => {
+        if (loginQueue.length > 0) {
+            const socketId = loginQueue.shift(); // Get first in line
             if (socketId) {
                 const socket = io.sockets.sockets.get(socketId);
                 if (socket) {
                     socket.emit('loginAllowed');
                 }
             }
+            // Update positions for everyone else remaining in queue
+            loginQueue.forEach((sid, index) => {
+                const s = io.sockets.sockets.get(sid);
+                if (s) s.emit('queueUpdate', index + 1);
+            });
+        } else {
+            // Queue empty, stop processing
+            clearInterval(interval);
+            isProcessingQueue = false;
         }
-        
-        // Notify everyone remaining in queue of their new position
-        loginQueue.forEach((sid, index) => {
-            const s = io.sockets.sockets.get(sid);
-            if (s) s.emit('queueUpdate', index + 1);
-        });
-    }
+    }, 1500);
 };
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // 1. Add user to Queue immediately
+  // 1. Add user to Queue immediately upon connection
   loginQueue.push(socket.id);
   socket.emit('queueUpdate', loginQueue.length);
   
-  // 2. Try to let them in immediately if space exists
-  manageQueue();
+  // Trigger queue processor if it's not running
+  if (!isProcessingQueue) {
+      processQueue();
+  }
 
-  // 3. Wait for spawn request (Login successful)
+  // 2. Wait for user to request Spawn (after they pass the queue)
   socket.on('spawn', () => {
       // Logic for spawning the player
       const randomX = (Math.random() - 0.5) * 40; 
@@ -88,9 +87,6 @@ io.on('connection', (socket) => {
       socket.emit('currentPlayers', players);
       // Notify others
       socket.broadcast.emit('newPlayer', players[socket.id]);
-      
-      // Check queue again (just in case)
-      manageQueue();
   });
 
   socket.on('move', (position, rotation, animation) => {
@@ -102,6 +98,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Ping listener for latency check
   socket.on('pingSync', (callback) => {
     if (typeof callback === 'function') callback(); 
   });
@@ -120,9 +117,6 @@ io.on('connection', (socket) => {
         delete players[socket.id];
         io.emit('playerDisconnected', socket.id);
     }
-
-    // A slot opened up! Let someone in!
-    manageQueue();
   });
 });
 
