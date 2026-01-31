@@ -25,9 +25,9 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => {
-    // FIX: Hide all weapons except one Rifle/Gun
-    // Common Synty/Asset pack issue where all props are enabled by default
-    let rifleFound = false;
+    // FIX: Optimized Weapon Filtering
+    // Logic: Find FIRST rifle-like object, make it visible. Hide EVERYTHING else that looks like a prop.
+    let mainWeaponFound = false;
 
     clone.traverse((object: any) => {
       if (object.isMesh) {
@@ -37,29 +37,33 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
         
         const name = object.name.toLowerCase();
         
-        // Keywords for items to hide
-        const unwanted = ['sword', 'shield', 'axe', 'shovel', 'pickaxe', 'pistol', 'bow', 'dagger', 'spear'];
-        // Keywords to keep (Prioritize Rifle)
-        const wanted = ['rifle', 'gun', 'ak', 'smg'];
-
-        // Logic: 
-        // 1. If it's a wanted weapon and we haven't found one yet -> Keep visible
-        // 2. If it's a wanted weapon but we already have one -> Hide
-        // 3. If it's an unwanted weapon -> Hide
+        // Keywords for items to ALWAYS hide if not the chosen weapon
+        const unwantedKeywords = [
+            'sword', 'shield', 'axe', 'shovel', 'pickaxe', 'pistol', 'bow', 'dagger', 'spear', 
+            'hammer', 'mace', 'club', 'staff', 'wand', 'knife', 'tool', 'prop', 'item', 
+            'bag', 'backpack', 'helmet', 'hat' // Added accessories to be safe, remove if you want hats
+        ];
         
-        const isWanted = wanted.some(w => name.includes(w));
-        const isUnwanted = unwanted.some(u => name.includes(u));
+        // Keywords for the Primary Weapon we want to keep
+        const wantedKeywords = ['rifle', 'gun', 'ak', 'smg', 'carbine', 'sniper'];
+
+        const isWanted = wantedKeywords.some(w => name.includes(w));
+        const isUnwanted = unwantedKeywords.some(u => name.includes(u));
 
         if (isWanted) {
-            if (!rifleFound) {
+            if (!mainWeaponFound) {
+                // Found our main gun!
                 object.visible = true;
-                rifleFound = true;
+                mainWeaponFound = true;
             } else {
+                // Already have a gun, hide duplicates
                 object.visible = false;
             }
         } else if (isUnwanted) {
+            // Hide all secondary trash
             object.visible = false;
         }
+        // If it's not in either list (like Body, Head, Arm), it stays visible by default
       }
     });
   }, [clone]);
@@ -69,31 +73,25 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
     if (actions) {
         const allActions = Object.keys(actions);
         
-        // Robust case-insensitive matcher
         const getActionKey = (query: string) => {
              if (!query) return undefined;
              const lowerQuery = query.toLowerCase();
-             // 1. Check exact or lowercase match
              const exact = allActions.find(key => key.toLowerCase() === lowerQuery);
              if (exact) return exact;
-             
-             // 2. Check partial match (e.g. "Armature|Run" matches "run")
              const partial = allActions.find(key => key.toLowerCase().includes(lowerQuery));
              return partial;
         };
 
-        // Determine target action based on prop
         let targetKey: string | undefined = undefined;
 
         if (animation.toLowerCase() === 'run') {
             targetKey = getActionKey('Run') || getActionKey('Sprint') || getActionKey('Walk');
         } else if (animation.toLowerCase() === 'jump') {
-            targetKey = getActionKey('Jump');
+            targetKey = getActionKey('Jump') || getActionKey('Fall'); // Fallback to fall if no jump
         } else {
             targetKey = getActionKey('Idle') || getActionKey('Stand') || getActionKey('Wait');
         }
 
-        // Fallback: If no match found, use the first available animation
         if (!targetKey && allActions.length > 0) {
             targetKey = allActions[0];
         }
@@ -102,27 +100,28 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
             const currentAction = actions[targetKey];
             const prevKey = previousAction.current;
 
-            // Transition if:
-            // 1. Animation key changed
-            // 2. OR it is a 'Jump' (always replay)
-            // 3. OR the current action is somehow not running (safety check)
             if (currentAction && (targetKey !== prevKey || animation.toLowerCase() === 'jump' || !currentAction.isRunning())) {
                 
-                // Fade out all other actions properly
                 allActions.forEach(key => {
                     if (key !== targetKey && actions[key]) {
                         actions[key]?.fadeOut(0.2);
                     }
                 });
 
-                // Play new action
                 currentAction.reset().fadeIn(0.2).play();
 
                 if (animation.toLowerCase() === 'jump') {
+                    // Make jump snappier
                     currentAction.setLoop(THREE.LoopOnce, 1);
                     currentAction.clampWhenFinished = true;
                 } else {
                     currentAction.setLoop(THREE.LoopRepeat, Infinity);
+                    // Sync Run speed if needed
+                    if(animation.toLowerCase() === 'run') {
+                        currentAction.timeScale = 1.2; // Slightly faster animation for better feel
+                    } else {
+                        currentAction.timeScale = 1;
+                    }
                 }
 
                 previousAction.current = targetKey;
@@ -134,6 +133,7 @@ export const PlayerModel: React.FC<PlayerModelProps> = ({ position, rotation, an
   return (
     <group ref={group} position={[position.x, position.y, position.z]} rotation={[0, rotation, 0]}>
       <primitive object={clone} scale={1} />
+      {/* Simple shadow blob */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
         <circleGeometry args={[0.5, 32]} />
         <meshBasicMaterial color="#000000" opacity={0.4} transparent />

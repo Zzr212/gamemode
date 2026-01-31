@@ -42,7 +42,8 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       
       const distance = groupRef.current.position.distanceTo(targetPos);
-      const lerpFactor = distance > 3 ? 1 : 12 * delta; 
+      // Smoother interpolation logic
+      const lerpFactor = distance > 5 ? 1 : 15 * delta; 
       
       groupRef.current.position.lerp(targetPos, lerpFactor);
 
@@ -54,19 +55,14 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       
-      groupRef.current.rotation.y += diff * 12 * delta;
+      groupRef.current.rotation.y += diff * 15 * delta;
     }
   });
 
   return (
     <group ref={groupRef}>
-      {/* 
-         KEY FIX: Adding 'key={data.animation}' forces the component to remount 
-         whenever the animation string changes. This ensures the new animation 
-         (Run/Jump) starts playing immediately and prevents "sliding" in Idle pose.
-      */}
       <PlayerModel 
-        key={data.animation}
+        key={data.animation} // Remount on animation change for instant transition
         position={{x:0, y:0, z:0}} 
         rotation={0} 
         animation={data.animation} 
@@ -75,7 +71,7 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   );
 };
 
-// --- CAMERA CONTROLLER (Advanced Third Person with Collision) ---
+// --- CAMERA CONTROLLER ---
 const CameraController: React.FC<{
   targetGroup: React.RefObject<THREE.Group>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
@@ -91,65 +87,46 @@ const CameraController: React.FC<{
     
     // Config
     const maxDistance = 7;
-    const minDistance = 2; // Closest camera can get to player
-    const playerHeight = 1.5; // Origin of look (Head level)
+    const minDistance = 2; 
+    const playerHeight = 1.5; 
     
-    // Yaw/Pitch from inputs
     const yaw = cameraRotation.current.yaw;
-    const pitch = Math.max(-1.4, Math.min(1.4, cameraRotation.current.pitch)); // Full freedom up/down
+    const pitch = Math.max(-1.4, Math.min(1.4, cameraRotation.current.pitch)); 
 
-    // 1. Calculate ideal relative position based on spherical coordinates
-    // "Orbit" around 0,0,0
     const hDist = maxDistance * Math.cos(pitch);
     const vDist = maxDistance * Math.sin(pitch);
     const orbitX = Math.sin(yaw) * hDist;
     const orbitZ = Math.cos(yaw) * hDist;
 
-    // 2. Define origin (Player Head)
     const origin = new THREE.Vector3(playerPos.x, playerPos.y + playerHeight, playerPos.z);
     
-    // 3. Define Ideal Camera Position (without collision)
     const idealPos = new THREE.Vector3(
         origin.x + orbitX,
         origin.y + vDist,
         origin.z + orbitZ
     );
 
-    // 4. Collision Detection (Raycast from Head to IdealPos)
     const direction = new THREE.Vector3().subVectors(idealPos, origin).normalize();
     raycaster.current.set(origin, direction);
     
-    // Find map object to collide with
     const mapObject = scene.getObjectByName('ground-collider');
     let finalDistance = maxDistance;
 
     if (mapObject) {
         const intersects = raycaster.current.intersectObject(mapObject, true);
-        // If we hit something between player and ideal camera position
         if (intersects.length > 0 && intersects[0].distance < maxDistance) {
-            // Pull camera in slightly in front of the wall (buffer 0.2)
             finalDistance = Math.max(minDistance, intersects[0].distance - 0.2);
         }
     }
 
-    // 5. Recalculate Camera Position with safe distance
-    // We scale the vector from origin by the safe distance
     const safePos = origin.clone().add(direction.multiplyScalar(finalDistance));
 
-    // Smoothly move camera there
     currentPos.current.lerp(safePos, 0.3);
     camera.position.copy(currentPos.current);
 
-    // 6. Look At Logic (Offset for Crosshair)
-    // To have the Crosshair (Screen Center) point at an enemy, the Camera must look at the "Aim Point".
-    // To have the Character on the LEFT, we must look at a point to the RIGHT of the character.
-    
-    // Calculate Right Vector relative to camera yaw
     const rightDir = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    
-    // Look Target Offset
-    const lookOffsetRight = 2.0; // Pushes character left
-    const lookOffsetUp = 0.5;    // Pushes character down slightly (Crosshair goes up)
+    const lookOffsetRight = 2.0; 
+    const lookOffsetUp = 0.5;    
 
     const targetLookAt = new THREE.Vector3(
         origin.x + (rightDir.x * lookOffsetRight),
@@ -186,16 +163,23 @@ const PlayerController: React.FC<{
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
-  const SPEED = 0.15;
-  const GRAVITY = 0.02;
-  const JUMP_FORCE = 0.4;
+  // Constants tuned for Delta Time
+  const MOVE_SPEED = 6.0; // Units per second
+  const GRAVITY = 18.0;   // Units per second squared
+  const JUMP_VELOCITY = 8.0; 
   const COLLIDER_NAME = 'ground-collider';
+  
+  // Radius check to prevent falling through small gaps
+  const CHECK_RADIUS = 0.3; 
 
-  useFrame(() => {
+  useFrame((_, delta) => {
+    // Cap delta to prevent huge jumps on lag (max 0.1s)
+    const dt = Math.min(delta, 0.1);
+
     const { x, y } = joystickData.current;
     const mapObject = scene.getObjectByName(COLLIDER_NAME);
 
-    // 1. Movement Logic
+    // 1. Movement Logic (Delta Time Based)
     const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1;
     let moveX = 0;
     let moveZ = 0;
@@ -207,37 +191,66 @@ const PlayerController: React.FC<{
       const rightX = Math.cos(camYaw) * x;
       const rightZ = -Math.sin(camYaw) * x;
 
-      moveX = (forwardX + rightX) * SPEED;
-      moveZ = (forwardZ + rightZ) * SPEED;
+      moveX = (forwardX + rightX) * MOVE_SPEED * dt;
+      moveZ = (forwardZ + rightZ) * MOVE_SPEED * dt;
 
       if (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001) {
           const targetRotation = Math.atan2(moveX, moveZ);
-          let delta = targetRotation - rotation.current;
-          while (delta > Math.PI) delta -= Math.PI * 2;
-          while (delta < -Math.PI) delta += Math.PI * 2;
-          rotation.current += delta * 0.2;
+          let deltaRot = targetRotation - rotation.current;
+          while (deltaRot > Math.PI) deltaRot -= Math.PI * 2;
+          while (deltaRot < -Math.PI) deltaRot += Math.PI * 2;
+          rotation.current += deltaRot * 10 * dt; // Smooth rotation
       }
     }
 
-    // 2. Physics & Collision
+    // 2. Physics & Multi-Point Ground Detection
+    // To prevent falling through gaps, we check 5 points: Center, Front, Back, Left, Right
     let groundY = -100;
+    
     if (mapObject) {
-        const origin = pos.current.clone().add(new THREE.Vector3(0, 5, 0));
-        downRaycaster.current.set(origin, new THREE.Vector3(0, -1, 0));
-        const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        if (intersects.length > 0) groundY = intersects[0].point.y;
+        const origins = [
+            new THREE.Vector3(0, 0, 0), // Center
+            new THREE.Vector3(CHECK_RADIUS, 0, 0), // Right
+            new THREE.Vector3(-CHECK_RADIUS, 0, 0), // Left
+            new THREE.Vector3(0, 0, CHECK_RADIUS), // Front
+            new THREE.Vector3(0, 0, -CHECK_RADIUS) // Back
+        ];
+
+        let maxHitY = -100;
+
+        for (const offset of origins) {
+            // Raycast origin: Position + Offset + Height Bias
+            const rayOrigin = pos.current.clone().add(offset).add(new THREE.Vector3(0, 2, 0));
+            downRaycaster.current.set(rayOrigin, new THREE.Vector3(0, -1, 0));
+            
+            const intersects = downRaycaster.current.intersectObject(mapObject, true);
+            if (intersects.length > 0) {
+                if (intersects[0].point.y > maxHitY) {
+                    maxHitY = intersects[0].point.y;
+                }
+            }
+        }
+        groundY = maxHitY;
     }
 
+    // Horizontal Collision Check (Wall check)
     let allowMove = true;
     if (isMoving && mapObject) {
         const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
-        const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 5, 0));
+        // Check slightly above ground for walls
+        const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 1, 0));
         downRaycaster.current.set(futureOrigin, new THREE.Vector3(0, -1, 0));
         const intersects = downRaycaster.current.intersectObject(mapObject, true);
+        
+        // If we found ground at future pos
         if (intersects.length > 0) {
-            if (intersects[0].point.y - pos.current.y > 0.6) allowMove = false;
+            const heightDiff = intersects[0].point.y - pos.current.y;
+            // If the step is too high (wall), block movement
+            if (heightDiff > 0.5) allowMove = false;
         } else if (isGrounded.current) {
-            allowMove = false; 
+            // If grounded but future is void, allow move (falling off edge), 
+            // BUT we want to prevent falling off tiny gaps, the groundY check above handles gaps.
+            // This else block is for huge drops.
         }
     }
 
@@ -246,17 +259,20 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
+    // Jump Logic
     if (jumpPressed.current && isGrounded.current) {
-        velocity.current.y = JUMP_FORCE;
+        velocity.current.y = JUMP_VELOCITY;
         isGrounded.current = false;
         jumpPressed.current = false;
     } else {
         jumpPressed.current = false;
     }
 
+    // Gravity Application
+    // We add a small buffer (0.1) to snap to ground
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
-        velocity.current.y -= GRAVITY;
-        pos.current.y += velocity.current.y;
+        velocity.current.y -= GRAVITY * dt;
+        pos.current.y += velocity.current.y * dt;
         isGrounded.current = false;
     } else {
         velocity.current.y = 0;
@@ -264,6 +280,7 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
 
+    // Respawn Floor
     if (pos.current.y < -20) {
         pos.current.y = 10;
         velocity.current.set(0,0,0);
@@ -275,7 +292,7 @@ const PlayerController: React.FC<{
 
     // Animation Logic
     let newAnim = 'Idle';
-    if (!isGrounded.current && velocity.current.y > 0) newAnim = 'Jump';
+    if (!isGrounded.current) newAnim = 'Jump'; // Removed velocity check to show jump pose while falling
     else if (isMoving) newAnim = 'Run';
 
     const animChanged = animationRef.current !== newAnim;
@@ -285,8 +302,9 @@ const PlayerController: React.FC<{
         setVisualAnimation(newAnim);
     }
 
+    // Network Sync
     const now = Date.now();
-    const shouldSend = (now - lastSendTime.current > 50) || animChanged;
+    const shouldSend = (now - lastSendTime.current > 50) || animChanged; // 20 updates per sec
     
     if (shouldSend) {
         onMove(pos.current, rotation.current, animationRef.current);
@@ -310,7 +328,6 @@ const PlayerController: React.FC<{
 export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
   const [dpr, setDpr] = useState(1.5); 
 
-  // Memoize handler to prevent unnecessary re-renders in PlayerController
   const handlePlayerMove = useCallback((pos: Vector3, rot: number, anim: string) => {
     socket.emit('move', pos, rot, anim);
   }, []);
