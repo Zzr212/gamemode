@@ -33,17 +33,14 @@ io.on('connection', (socket) => {
       // Send existing players to the new joiner
       socket.emit('currentPlayers', players);
 
-      // Random Spawning Logic
-      const randomX = (Math.random() - 0.5) * 40; 
-      const randomZ = (Math.random() - 0.5) * 40;
-
-      // Create new player state
+      // Spawn at Map Center (0, 0)
+      // We spawn high (y=10) to let physics handle the drop to floor
       players[socket.id] = {
         id: socket.id,
         position: { 
-            x: randomX, 
-            y: 5, 
-            z: randomZ 
+            x: 0, 
+            y: 10, 
+            z: 0 
         },
         rotation: 0,
         animation: 'Idle',

@@ -160,26 +160,27 @@ const PlayerController: React.FC<{
   const [visualAnimation, setVisualAnimation] = useState('Idle');
   
   const downRaycaster = useRef(new THREE.Raycaster());
+  const wallRaycaster = useRef(new THREE.Raycaster()); // NEW: Horizontal collision
+
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
-  // Constants tuned for Delta Time
-  const MOVE_SPEED = 6.0; // Units per second
-  const GRAVITY = 18.0;   // Units per second squared
+  // Tuning
+  const MOVE_SPEED = 6.0; 
+  const GRAVITY = 18.0;   
   const JUMP_VELOCITY = 8.0; 
   const COLLIDER_NAME = 'ground-collider';
   
-  // Radius check to prevent falling through small gaps
   const CHECK_RADIUS = 0.3; 
+  const MAX_STEP_HEIGHT = 0.6; // Max height we snap up to (knee height)
 
   useFrame((_, delta) => {
-    // Cap delta to prevent huge jumps on lag (max 0.1s)
     const dt = Math.min(delta, 0.1);
 
     const { x, y } = joystickData.current;
     const mapObject = scene.getObjectByName(COLLIDER_NAME);
 
-    // 1. Movement Logic (Delta Time Based)
+    // 1. Calculate Intent (Speed + Rotation)
     const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1;
     let moveX = 0;
     let moveZ = 0;
@@ -194,17 +195,43 @@ const PlayerController: React.FC<{
       moveX = (forwardX + rightX) * MOVE_SPEED * dt;
       moveZ = (forwardZ + rightZ) * MOVE_SPEED * dt;
 
+      // Update Rotation
       if (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001) {
           const targetRotation = Math.atan2(moveX, moveZ);
           let deltaRot = targetRotation - rotation.current;
           while (deltaRot > Math.PI) deltaRot -= Math.PI * 2;
           while (deltaRot < -Math.PI) deltaRot += Math.PI * 2;
-          rotation.current += deltaRot * 10 * dt; // Smooth rotation
+          rotation.current += deltaRot * 10 * dt; 
       }
     }
 
-    // 2. Physics & Multi-Point Ground Detection
-    // To prevent falling through gaps, we check 5 points: Center, Front, Back, Left, Right
+    // 2. Wall Collision (Horizontal Raycast)
+    let isBlocked = false;
+    if (isMoving && mapObject && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
+        const moveVector = new THREE.Vector3(moveX, 0, moveZ);
+        const moveLength = moveVector.length();
+        const moveDir = moveVector.normalize();
+        
+        // Raycast from waist height (approx 1.0 unit up) in direction of movement
+        // We add a small buffer (0.4) to the check distance (radius + buffer)
+        const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 1.0, 0));
+        wallRaycaster.current.set(rayOrigin, moveDir);
+        
+        // Far distance = Radius + intended move distance
+        wallRaycaster.current.far = 0.5 + moveLength; 
+        
+        const wallIntersects = wallRaycaster.current.intersectObject(mapObject, true);
+        if (wallIntersects.length > 0) {
+            isBlocked = true;
+        }
+    }
+
+    if (!isBlocked) {
+        pos.current.x += moveX;
+        pos.current.z += moveZ;
+    }
+
+    // 3. Ground Detection (Gravity & Snapping)
     let groundY = -100;
     
     if (mapObject) {
@@ -217,46 +244,29 @@ const PlayerController: React.FC<{
         ];
 
         let maxHitY = -100;
+        let foundValidGround = false;
 
         for (const offset of origins) {
-            // Raycast origin: Position + Offset + Height Bias
+            // Raycast origin: Position + Offset + High enough to detect floor
             const rayOrigin = pos.current.clone().add(offset).add(new THREE.Vector3(0, 2, 0));
             downRaycaster.current.set(rayOrigin, new THREE.Vector3(0, -1, 0));
             
             const intersects = downRaycaster.current.intersectObject(mapObject, true);
             if (intersects.length > 0) {
-                if (intersects[0].point.y > maxHitY) {
-                    maxHitY = intersects[0].point.y;
+                const hitY = intersects[0].point.y;
+                
+                // IMPORTANT: Prevent snapping to roof (climbing bug)
+                // Only treat it as ground if it's not too far above our current feet
+                // Logic: If hitY is > currentY + step_height, it's a wall/ceiling, ignore it.
+                if (hitY - pos.current.y <= MAX_STEP_HEIGHT) {
+                    if (hitY > maxHitY) {
+                        maxHitY = hitY;
+                        foundValidGround = true;
+                    }
                 }
             }
         }
-        groundY = maxHitY;
-    }
-
-    // Horizontal Collision Check (Wall check)
-    let allowMove = true;
-    if (isMoving && mapObject) {
-        const futurePos = pos.current.clone().add(new THREE.Vector3(moveX, 0, moveZ));
-        // Check slightly above ground for walls
-        const futureOrigin = futurePos.clone().add(new THREE.Vector3(0, 1, 0));
-        downRaycaster.current.set(futureOrigin, new THREE.Vector3(0, -1, 0));
-        const intersects = downRaycaster.current.intersectObject(mapObject, true);
-        
-        // If we found ground at future pos
-        if (intersects.length > 0) {
-            const heightDiff = intersects[0].point.y - pos.current.y;
-            // If the step is too high (wall), block movement
-            if (heightDiff > 0.5) allowMove = false;
-        } else if (isGrounded.current) {
-            // If grounded but future is void, allow move (falling off edge), 
-            // BUT we want to prevent falling off tiny gaps, the groundY check above handles gaps.
-            // This else block is for huge drops.
-        }
-    }
-
-    if (allowMove) {
-        pos.current.x += moveX;
-        pos.current.z += moveZ;
+        if (foundValidGround) groundY = maxHitY;
     }
 
     // Jump Logic
@@ -268,14 +278,14 @@ const PlayerController: React.FC<{
         jumpPressed.current = false;
     }
 
-    // Gravity Application
-    // We add a small buffer (0.1) to snap to ground
+    // Apply Gravity / Snap to Floor
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= GRAVITY * dt;
         pos.current.y += velocity.current.y * dt;
         isGrounded.current = false;
     } else {
         velocity.current.y = 0;
+        // Smooth snap or hard snap? Hard snap prevents jitter.
         pos.current.y = groundY;
         isGrounded.current = true;
     }
@@ -283,6 +293,8 @@ const PlayerController: React.FC<{
     // Respawn Floor
     if (pos.current.y < -20) {
         pos.current.y = 10;
+        pos.current.x = 0;
+        pos.current.z = 0;
         velocity.current.set(0,0,0);
     }
 
@@ -292,8 +304,8 @@ const PlayerController: React.FC<{
 
     // Animation Logic
     let newAnim = 'Idle';
-    if (!isGrounded.current) newAnim = 'Jump'; // Removed velocity check to show jump pose while falling
-    else if (isMoving) newAnim = 'Run';
+    if (!isGrounded.current) newAnim = 'Jump'; 
+    else if (isMoving && !isBlocked) newAnim = 'Run';
 
     const animChanged = animationRef.current !== newAnim;
 
@@ -304,7 +316,7 @@ const PlayerController: React.FC<{
 
     // Network Sync
     const now = Date.now();
-    const shouldSend = (now - lastSendTime.current > 50) || animChanged; // 20 updates per sec
+    const shouldSend = (now - lastSendTime.current > 50) || animChanged; 
     
     if (shouldSend) {
         onMove(pos.current, rotation.current, animationRef.current);
