@@ -3,13 +3,16 @@ import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
+import { AuthScreen } from './components/AuthScreen';
 import { connectSocket, socket } from './services/socketService';
-import { JoystickData, PlayerState, GamePhase, GameStateData, Role } from './types';
+import { JoystickData, PlayerState, GamePhase, GameStateData, Role, UserProfile } from './types';
 
-type AppState = 'MENU' | 'GAME';
+// App Phases: AUTH (Portrait) -> MENU (Landscape) -> GAME (Landscape)
+type AppState = 'AUTH' | 'MENU' | 'GAME';
 
 function App() {
-  const [appState, setAppState] = useState<AppState>('MENU');
+  const [appState, setAppState] = useState<AppState>('AUTH');
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   
   const [players, setPlayers] = useState<Record<string, PlayerState>>({});
   const [myId, setMyId] = useState<string | null>(null);
@@ -22,9 +25,6 @@ function App() {
   const [spectatingIndex, setSpectatingIndex] = useState<number>(0);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [ping, setPing] = useState<number>(0);
-  
-  // UI State for Start Button Error
-  const [startError, setStartError] = useState(false);
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
@@ -34,26 +34,31 @@ function App() {
   const isSpectator = !myPlayer || myPlayer.role === Role.SPECTATOR || myPlayer.isDead;
   const isHunter = myPlayer?.role === Role.HUNTER && !myPlayer.isDead;
 
-  const activePlayers = Object.values(players).filter(p => p.role !== Role.SPECTATOR && !p.isDead);
+  const activePlayers = Object.values(players).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead);
+
+  // --- AUTH HANDLER ---
+  const handleLoginSuccess = (user: UserProfile) => {
+      setCurrentUser(user);
+      setAppState('MENU');
+  };
 
   useEffect(() => {
-    // REMOVED: connectSocket() on mount. 
-    // We only connect when the user clicks Play.
-
+    // Socket Listeners
     const onConnect = () => setMyId(socket.id || null);
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => setPlayers(serverPlayers);
     const onNewPlayer = (player: PlayerState) => {
         setPlayers((prev) => ({ ...prev, [player.id]: player }));
-        if(appState === 'GAME') addNotification(`Player joined`);
+        if(appState === 'GAME') addNotification(`${player.username} joined`);
     };
     const onPlayerMoved = (player: PlayerState) => setPlayers((prev) => ({ ...prev, [player.id]: player }));
     const onPlayerDisconnected = (id: string) => {
+        const p = players[id];
         setPlayers((prev) => {
             const newPlayers = { ...prev };
             delete newPlayers[id];
             return newPlayers;
         });
-        if(appState === 'GAME') addNotification(`Player left`);
+        if(appState === 'GAME' && p) addNotification(`${p.username} left`);
     };
 
     const onGameStateUpdate = (data: GameStateData) => {
@@ -63,9 +68,7 @@ function App() {
     };
 
     const onGameMessage = (msg: string) => {
-        // Only show relevant messages
         addNotification(msg);
-        // Don't show large splash text for generic status updates, only big events
         if (msg.includes("WIN")) {
             setRoleMessage(msg);
             setTimeout(() => setRoleMessage(null), 4000);
@@ -110,17 +113,15 @@ function App() {
         socket.off('playerKilled', onPlayerKilled);
         clearInterval(pingInterval);
     };
-  }, [appState, myId]);
+  }, [appState, myId, players]);
 
-  // Logic to show Role Splash ONLY when round starts (IN_PROGRESS)
   useEffect(() => {
     if (gamePhase === GamePhase.IN_PROGRESS && myPlayer && !myPlayer.isDead && myPlayer.role !== Role.SPECTATOR) {
-        // Double check this isn't firing repeatedly
         const roleText = myPlayer.role === Role.HUNTER ? "YOU ARE THE HUNTER" : "HIDE!";
         setRoleMessage(roleText);
         setTimeout(() => setRoleMessage(null), 3000);
     }
-  }, [gamePhase, myPlayer?.role]); // Dependencies ensure it fires when phase changes to IN_PROGRESS
+  }, [gamePhase, myPlayer?.role]); 
 
   const addNotification = (msg: string) => {
     setNotifications(prev => [...prev.slice(-3), msg]); 
@@ -138,30 +139,21 @@ function App() {
   const handleJump = () => { jumpRef.current = true; };
   
   const handlePlayGame = () => {
-      // Connect only on click
-      connectSocket();
-      setAppState('GAME');
-      // Small delay to ensure connection before emitting request (socketService handles buffering but good to be safe)
-      if (socket.connected) {
-          socket.emit('requestGameStart');
-      } else {
-          socket.once('connect', () => {
+      if (currentUser) {
+          connectSocket(currentUser);
+          setAppState('GAME');
+          
+          if (socket.connected) {
               socket.emit('requestGameStart');
-          });
+          } else {
+              socket.once('connect', () => {
+                  socket.emit('requestGameStart');
+              });
+          }
       }
   };
   
   const handleKill = () => { if (isHunter) socket.emit('attemptKill'); };
-  
-  const handleStartMatch = () => {
-      // survivors count in WAITING phase equals total active players
-      if (survivors < 2) {
-          setStartError(true);
-          setTimeout(() => setStartError(false), 500);
-          return;
-      }
-      socket.emit('startMatch');
-  };
 
   const cycleSpectator = (dir: number) => {
       if (activePlayers.length === 0) return;
@@ -182,6 +174,14 @@ function App() {
       return `${min}:${sec.toString().padStart(2, '0')}`;
   };
 
+  // --- RENDER ---
+
+  // 1. Auth Screen (Portrait Friendly)
+  if (appState === 'AUTH') {
+      return <AuthScreen onLogin={handleLoginSuccess} />;
+  }
+
+  // 2. Main Menu or Game (Landscape Enforced)
   return (
     <div className="w-full h-screen bg-black overflow-hidden relative select-none touch-none">
       
@@ -215,40 +215,22 @@ function App() {
                 <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-white/90 rounded-full -translate-x-1/2 -translate-y-1/2 shadow-[0_0_2px_rgba(0,0,0,1)] z-10 pointer-events-none" />
             )}
 
-            {/* COMPACT HUD - Top Bar */}
+            {/* COMPACT HUD */}
             <div className="absolute top-2 left-0 right-0 px-4 z-40 pointer-events-none flex justify-center items-start">
-                
-                {/* Main Info Box */}
                 <div className="flex items-center gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg pointer-events-auto">
                     
-                    {/* Phase / Timer OR START BUTTON */}
+                    {/* Phase / Timer */}
                     <div className="flex flex-col items-center justify-center min-w-[60px] h-[40px]">
-                        {gamePhase === GamePhase.WAITING ? (
-                             <button
-                                onPointerDown={handleStartMatch}
-                                className={`
-                                    text-xs font-black text-white px-3 py-1.5 rounded-md shadow-lg transition-all
-                                    ${startError 
-                                        ? 'bg-red-600 animate-pulse ring-2 ring-red-400' 
-                                        : 'bg-gradient-to-br from-green-500 to-emerald-700 hover:scale-105 active:scale-95 border border-green-400/30'
-                                    }
-                                `}
-                             >
-                                START
-                             </button>
-                        ) : (
-                            <>
-                                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-                                    {gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
-                                </span>
-                                <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
-                                    {gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
-                                </span>
-                            </>
-                        )}
+                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+                            {gamePhase === GamePhase.WAITING ? 'LOBBY' : 
+                             gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
+                        </span>
+                        <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
+                            {gamePhase === GamePhase.WAITING ? '--:--' : 
+                             gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
+                        </span>
                     </div>
 
-                    {/* Divider */}
                     <div className="w-px h-8 bg-white/20"></div>
 
                     {/* Survivors */}
@@ -257,7 +239,6 @@ function App() {
                         <span className="text-xl font-mono font-bold text-green-400 leading-none">{survivors}</span>
                     </div>
 
-                    {/* Divider */}
                     <div className="w-px h-8 bg-white/20"></div>
 
                      {/* Role / Ping */}
@@ -277,7 +258,7 @@ function App() {
                 </div>
             </div>
 
-            {/* Notifications (Top Left) */}
+            {/* Notifications */}
             <div className="absolute top-16 left-4 z-30 flex flex-col gap-1 pointer-events-none">
                 {notifications.map((msg, i) => (
                     <div key={i} className="bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur border-l-2 border-blue-500 opacity-90">
@@ -286,21 +267,17 @@ function App() {
                 ))}
             </div>
 
-            {/* Gameplay Controls */}
+            {/* Controls */}
             {!isSpectator && (
                 <div className="absolute inset-0 z-30 flex pointer-events-none">
-                    {/* Left: Joystick */}
                     <div className="w-1/2 h-full flex items-end justify-start p-8 md:p-12">
                         <div className="pointer-events-auto opacity-70 hover:opacity-100 transition-opacity">
                             <Joystick onMove={handleJoystickMove} />
                         </div>
                     </div>
 
-                    {/* Right: Look & Actions */}
                     <div className="w-1/2 h-full relative pointer-events-auto">
                         <TouchLook onRotate={handleCameraRotate} />
-                        
-                        {/* Jump Button */}
                         <div className="absolute bottom-8 right-8 pointer-events-auto">
                             <button
                                 onPointerDown={handleJump}
@@ -310,7 +287,6 @@ function App() {
                             </button>
                         </div>
 
-                        {/* Kill Button (Hunter Only, only in progress) */}
                         {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                             <div className="absolute bottom-8 right-28 pointer-events-auto flex flex-col items-center">
                                 <button
@@ -325,7 +301,7 @@ function App() {
                 </div>
             )}
 
-            {/* Spectator Controls */}
+            {/* Spectator UI */}
             {isSpectator && (
                 <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center items-center gap-4 pointer-events-auto">
                     <button onClick={() => cycleSpectator(-1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">←</button>
@@ -338,7 +314,7 @@ function App() {
         </>
       )}
 
-      {/* Warning */}
+      {/* Orientation Warning - Only shows if NOT in Auth Screen */}
       <div className="hidden portrait:flex absolute inset-0 bg-black z-[100] items-center justify-center text-white text-center p-8">
         <p className="text-xl font-bold tracking-wider">PLEASE ROTATE DEVICE</p>
       </div>

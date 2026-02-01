@@ -19,9 +19,17 @@ export enum Role {
   SPECTATOR = 'SPECTATOR'
 }
 
+export interface UserProfile {
+  id: string;
+  username: string;
+  email: string;
+}
+
 export interface PlayerState {
   id: string; // Socket ID (temporary session)
-  deviceId: string; // Persistent Device ID
+  userId: string; // Persistent Account ID
+  username: string;
+  deviceId: string; // Persistent Device ID (fallback)
   position: Vector3;
   rotation: number;
   animation: string;
@@ -52,7 +60,6 @@ export interface ClientToServerEvents {
   pingSync: (callback: () => void) => void;
   requestGameStart: () => void; // Player joining from menu
   attemptKill: () => void; // Hunter clicking kill button
-  startMatch: () => void; // Manual start trigger
 }
 
 export interface JoystickData {

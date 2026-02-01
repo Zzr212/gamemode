@@ -4,11 +4,14 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { PlayerState, GamePhase, Role } from '../types.js';
+import { db } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.use(express.json()); // Enable JSON body parsing for login/register
+
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -19,7 +22,29 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
-// Game State
+// --- AUTH API ROUTES ---
+app.post('/api/register', (req, res) => {
+    const { username, email, password } = req.body;
+    if (!username || !email || !password) {
+        return res.status(400).json({ error: 'All fields required' });
+    }
+    if (db.findUserByUsername(username)) {
+        return res.status(400).json({ error: 'Username already taken' });
+    }
+    const user = db.createUser(username, email, password);
+    res.json({ success: true, user });
+});
+
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    const user = db.validateLogin(username, password);
+    if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    res.json({ success: true, user });
+});
+
+// --- GAME STATE ---
 let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
@@ -28,7 +53,7 @@ const ROUND_TIME = 300; // 5 minutes
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
 
-// --- GAME LOOP ---
+// --- GAME LOOP (Automatic) ---
 setInterval(() => {
   const playerIds = Object.keys(players);
   
@@ -39,12 +64,14 @@ setInterval(() => {
 
   const activeCount = activePlayers.length;
 
-  // 1. WAITING
-  // REMOVED: Automatic transition to COUNTDOWN. 
-  // Now handled by 'startMatch' event below.
+  // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
-      // Just keep broadcasting state so clients know how many people are there
+    if (activeCount >= 2) {
+      console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
+      gamePhase = GamePhase.COUNTDOWN;
+      gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
+    }
   }
 
   // 2. COUNTDOWN
@@ -76,7 +103,6 @@ setInterval(() => {
     // Win Conditions
     let reason = null;
     
-    // If everyone left mid-game
     const totalInGame = livingHunters.length + livingHiders.length + playerIds.filter(id => players[id].isDead).length;
     if (totalInGame < 2) {
         reason = "Not enough players!";
@@ -100,7 +126,6 @@ setInterval(() => {
 }, 1000);
 
 function broadcastGameState() {
-    // Count survivors (Active Hiders)
     const survivors = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead).length;
     io.emit('gameStateUpdate', { 
         phase: gamePhase, 
@@ -128,7 +153,7 @@ function startGame() {
         const randomIndex = Math.floor(Math.random() * playerIds.length);
         const hunterId = playerIds[randomIndex];
         players[hunterId].role = Role.HUNTER;
-        console.log(`[SERVER] Hunter assigned: ${hunterId}`);
+        console.log(`[SERVER] Hunter assigned: ${players[hunterId].username}`);
     }
 
     io.emit('currentPlayers', players);
@@ -139,10 +164,13 @@ function endGame(reason: string) {
     console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
     
-    // Reset to Waiting immediately
-    // Players have to press START again to play another round
-    gamePhase = GamePhase.WAITING;
-    gameTimer = 0;
+    if (Object.keys(players).length >= 2) {
+        gamePhase = GamePhase.COUNTDOWN;
+        gameTimer = COUNTDOWN_TIME;
+    } else {
+        gamePhase = GamePhase.WAITING;
+        gameTimer = 0;
+    }
 
     // Reset everyone to "Lobby Mode" (Hider, Alive)
     Object.keys(players).forEach(id => {
@@ -156,19 +184,22 @@ function endGame(reason: string) {
 }
 
 io.on('connection', (socket) => {
-  const deviceId = socket.handshake.auth.token || 'unknown';
+  const deviceId = socket.handshake.auth.deviceId || 'unknown';
+  const userId = socket.handshake.auth.userId || 'guest-' + socket.id;
+  const username = socket.handshake.auth.username || 'Guest';
 
   socket.on('requestGameStart', () => {
-      // User clicked Play Game in Menu (Joining Lobby)
+      // User clicked Play Game in Menu
       
       let initialRole = Role.HIDER;
-      
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
       }
       
       players[socket.id] = {
         id: socket.id,
+        userId: userId,
+        username: username,
         deviceId: deviceId,
         position: { x: 0, y: 10, z: 0 },
         rotation: 0,
@@ -178,28 +209,11 @@ io.on('connection', (socket) => {
         isDead: false
       };
 
-      console.log(`[SERVER] Player joined world: ${socket.id} (${initialRole})`);
+      console.log(`[SERVER] ${username} joined world (ID: ${userId})`);
       
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
       broadcastGameState();
-  });
-
-  // NEW: Manual Round Start Trigger
-  socket.on('startMatch', () => {
-      if (gamePhase !== GamePhase.WAITING) return;
-
-      const activePlayers = Object.values(players).filter(p => p.role !== Role.SPECTATOR);
-      
-      if (activePlayers.length >= 2) {
-          console.log(`[SERVER] Match started by ${socket.id}`);
-          gamePhase = GamePhase.COUNTDOWN;
-          gameTimer = COUNTDOWN_TIME;
-          broadcastGameState();
-      } else {
-          // Optional: Could send specific error to client, but client handles UI blink
-          console.log(`[SERVER] Start failed: not enough players (${activePlayers.length})`);
-      }
   });
 
   socket.on('move', (position, rotation, animation) => {
@@ -225,7 +239,7 @@ io.on('connection', (socket) => {
           const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
           if (dist <= KILL_DISTANCE) {
-              console.log(`[SERVER] Kill: ${hunter.id} -> ${hider.id}`);
+              console.log(`[SERVER] Kill: ${hunter.username} -> ${hider.username}`);
               hider.isDead = true;
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
@@ -241,7 +255,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     if (players[socket.id]) {
-        console.log(`[SERVER] Player left: ${socket.id}`);
+        console.log(`[SERVER] ${players[socket.id].username} left.`);
         delete players[socket.id];
         io.emit('playerDisconnected', socket.id);
         broadcastGameState();

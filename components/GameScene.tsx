@@ -8,12 +8,11 @@ import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
 
 // Error Boundary
-class ModelErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
+class ModelErrorBoundary extends Component<{ children?: ReactNode }, { hasError: boolean }> {
+  public state = { hasError: false };
+  
   static getDerivedStateFromError() { return { hasError: true }; }
+  
   render() { return this.state.hasError ? null : this.props.children; }
 }
 
@@ -372,7 +371,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
             <MapModel />
 
             {/* Remote Players */}
-            {Object.values(players).map((p) => {
+            {Object.values(players).map((p: PlayerState) => {
               if (p.id === myId) return null;
               return <RemotePlayer key={p.id} data={p} />;
             })}
