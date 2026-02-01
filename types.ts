@@ -71,6 +71,34 @@ export interface JoystickData {
 declare global {
   namespace JSX {
     interface IntrinsicElements {
+      // Containers
+      group: any;
+      primitive: any;
+      
+      // Objects
+      mesh: any;
+      instancedMesh: any;
+      
+      // Geometries
+      circleGeometry: any;
+      sphereGeometry: any;
+      ringGeometry: any;
+      
+      // Materials
+      meshBasicMaterial: any;
+      meshStandardMaterial: any;
+      
+      // Lights
+      ambientLight: any;
+      directionalLight: any;
+      pointLight: any;
+      spotLight: any;
+      
+      // Scene & Effects
+      fog: any;
+      color: any;
+
+      // Catch-all
       [elemName: string]: any;
     }
   }
