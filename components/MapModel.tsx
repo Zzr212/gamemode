@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
+import '../types';
 
 export const MapModel: React.FC = () => {
   // Simple loading. Suspense in GameScene will handle the waiting time.

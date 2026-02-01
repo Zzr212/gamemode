@@ -3,6 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Environment, Float, ContactShadows, SpotLight } from '@react-three/drei';
 import { PlayerModel } from './PlayerModel';
 import * as THREE from 'three';
+import '../types';
 
 interface MainMenuProps {
   onPlay: () => void;

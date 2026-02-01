@@ -26,20 +26,18 @@ let gameTimer: number = 0;
 
 const ROUND_TIME = 300; // 5 minutes
 const COUNTDOWN_TIME = 10;
-const KILL_DISTANCE = 2.5; // Meters
+const KILL_DISTANCE = 3.0; // Increased slightly for better feel
 
 // --- GAME LOOP ---
 setInterval(() => {
   const playerIds = Object.keys(players);
-  const activePlayers = playerIds.filter(id => players[id].role !== Role.SPECTATOR && !players[id].isDead);
-  const allInGame = playerIds.filter(id => players[id].role !== Role.NONE); // Everyone who clicked Play
-
+  // Active = Not Spectator, Not Dead (Valid candidates for game start)
+  const activePlayers = playerIds.filter(id => players[id].role !== Role.SPECTATOR);
+  
   // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
-    // Need at least 2 active players (or 1 waiting and 1 joining)
-    // Actually, we check if we have 2+ people who are not just sitting in menu (Role.NONE)
-    if (allInGame.length >= 2) {
-      console.log("Starting Countdown...");
+    if (activePlayers.length >= 2) {
+      console.log(`[SERVER] Starting Countdown with ${activePlayers.length} players.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
@@ -50,14 +48,16 @@ setInterval(() => {
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     
-    if (allInGame.length < 2) {
-        // Abort if someone leaves
+    if (activePlayers.length < 2) {
+        console.log("[SERVER] Countdown aborted - not enough players.");
         gamePhase = GamePhase.WAITING;
+        gameTimer = 0;
         broadcastGameState();
-        io.emit('gameMessage', "Not enough players!");
+        io.emit('gameMessage', "Waiting for more players...");
     } else if (gameTimer <= 0) {
         startGame();
     } else {
+        // Broadcast timer every second
         broadcastGameState();
     }
   }
@@ -66,26 +66,25 @@ setInterval(() => {
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
-    // Check Win Conditions
-    const hunters = activePlayers.filter(id => players[id].role === Role.HUNTER);
-    const hiders = activePlayers.filter(id => players[id].role === Role.HIDER);
-
-    // If Hunter left
-    if (hunters.length === 0) {
-        endGame("HIDERS WIN (Hunter left)");
+    // Valid "Living" players for win condition
+    const livingHunters = activePlayers.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
+    const livingHiders = activePlayers.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
+    
+    // Win Conditions
+    if (livingHunters.length === 0) {
+        // Hunter disconnected? Or hasn't been picked properly?
+        // If game just started, give it a second. But normally valid.
+        // Wait, if 2 players, 1 hunter 1 hider.
+        endGame("HIDERS WIN (Hunter Left)");
     } 
-    // If all Hiders dead
-    else if (hiders.length === 0) {
+    else if (livingHiders.length === 0) {
         endGame("HUNTER WINS");
     }
-    // Time out
     else if (gameTimer <= 0) {
         endGame("HIDERS WIN (Time Limit)");
     } 
-    // Just tick
     else {
-        // Only broadcast timer every few seconds to save bandwidth, or every second if critical
-        // For 5 mins, every second is fine for modern connection
+        // Optimization: Only broadcast timer every second
         broadcastGameState();
     }
   }
@@ -96,32 +95,44 @@ function broadcastGameState() {
 }
 
 function startGame() {
-    console.log("Game Started!");
+    console.log("[SERVER] Game Started!");
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
 
     const playerIds = Object.keys(players);
-    // Filter out people who might be stuck in menu or spectators
-    // For simplicity, everyone currently connected and 'ready' (requestGameStart called) plays
     
-    // Reset everyone
+    // 1. Reset everyone to HIDER first
     playerIds.forEach(id => {
-        players[id].isDead = false;
-        players[id].role = Role.HIDER; // Default
+        // Only reset if not a spectator who joined late (though in COUNTDOWN phase everyone is valid)
+        if (players[id].role !== Role.SPECTATOR) {
+            players[id].isDead = false;
+            players[id].role = Role.HIDER;
+            players[id].position = { x: 0, y: 10, z: 0 }; // Respawn at center
+        }
     });
 
-    // Pick Random Hunter
-    const randomIndex = Math.floor(Math.random() * playerIds.length);
-    const hunterId = playerIds[randomIndex];
-    players[hunterId].role = Role.HUNTER;
+    // 2. Pick Random Hunter
+    // Only pick from those who are HIDERs
+    const candidates = playerIds.filter(id => players[id].role === Role.HIDER);
+    
+    if (candidates.length > 0) {
+        const randomIndex = Math.floor(Math.random() * candidates.length);
+        const hunterId = candidates[randomIndex];
+        players[hunterId].role = Role.HUNTER;
+        console.log(`[SERVER] Assigned Hunter: ${hunterId}`);
+    } else {
+        console.error("[SERVER] No candidates for Hunter!");
+        gamePhase = GamePhase.WAITING; // Abort
+        return;
+    }
 
     // Notify clients
-    io.emit('currentPlayers', players); // Updates roles
+    io.emit('currentPlayers', players);
     broadcastGameState();
 }
 
 function endGame(reason: string) {
-    console.log("Game Ended:", reason);
+    console.log(`[SERVER] Game Ended: ${reason}`);
     io.emit('gameMessage', reason);
     
     // Reset to Lobby
@@ -131,8 +142,7 @@ function endGame(reason: string) {
     // Respawn everyone as Hider/Waiting
     Object.keys(players).forEach(id => {
         players[id].isDead = false;
-        players[id].role = Role.HIDER; // Or NONE/WAITING
-        // Teleport to spawn
+        players[id].role = Role.HIDER;
         players[id].position = { x: 0, y: 10, z: 0 };
     });
 
@@ -144,11 +154,7 @@ io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
   socket.on('requestGameStart', () => {
-      // Logic: 
-      // If Waiting -> Join as Hider (will be assigned later)
-      // If Countdown -> Join as Hider
-      // If InProgress -> Join as Spectator
-
+      // Determine Role based on Phase
       let initialRole = Role.HIDER;
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
@@ -164,15 +170,19 @@ io.on('connection', (socket) => {
         isDead: false
       };
 
+      console.log(`[SERVER] Player ${socket.id} joined as ${initialRole}`);
+      
+      // Send Initial State
       socket.emit('currentPlayers', players);
       socket.emit('gameStateUpdate', { phase: gamePhase, timer: gameTimer });
-      socket.broadcast.emit('newPlayer', players[socket.id]);
       
-      console.log(`Player ${socket.id} joined as ${initialRole}`);
+      // Notify others
+      socket.broadcast.emit('newPlayer', players[socket.id]);
   });
 
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
+    // Allow movement only if alive and not spectator
     if (p && !p.isDead && p.role !== Role.SPECTATOR) {
       p.position = position;
       p.rotation = rotation;
@@ -185,7 +195,6 @@ io.on('connection', (socket) => {
       const hunter = players[socket.id];
       if (!hunter || hunter.role !== Role.HUNTER || hunter.isDead) return;
 
-      // Check distance to all Hiders
       const hiders = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead);
       
       for (const hider of hiders) {
@@ -195,13 +204,16 @@ io.on('connection', (socket) => {
           const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
           if (dist <= KILL_DISTANCE) {
-              // Kill confirmed
-              console.log(`Hunter ${hunter.id} killed ${hider.id}`);
+              console.log(`[SERVER] Kill: ${hunter.id} -> ${hider.id}`);
               hider.isDead = true;
-              hider.role = Role.SPECTATOR; // Convert to spectator
+              // We don't change role to spectator immediately in 'role' field, 
+              // keeping them as HIDER but isDead=true is better for logic, 
+              // BUT for client logic we treat dead as spectator mostly.
+              // Let's keep role HIDER so we know they were playing.
+              
               io.emit('playerKilled', hider.id);
-              io.emit('playerMoved', hider); // Update state to dead
-              break; // One kill per click? Or multi? Let's do one.
+              io.emit('playerMoved', hider); // Update dead state
+              break; 
           }
       }
   });

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import { useGraph } from '@react-three/fiber';
 import { Vector3 } from '../types';
+import '../types'; // Ensure global augmentation
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 

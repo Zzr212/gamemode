@@ -54,3 +54,26 @@ export interface JoystickData {
   x: number; // -1 to 1
   y: number; // -1 to 1
 }
+
+// React Three Fiber JSX elements
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      group: any;
+      mesh: any;
+      primitive: any;
+      instancedMesh: any;
+      ambientLight: any;
+      pointLight: any;
+      directionalLight: any;
+      spotLight: any;
+      fog: any;
+      color: any;
+      meshBasicMaterial: any;
+      meshStandardMaterial: any;
+      circleGeometry: any;
+      sphereGeometry: any;
+      ringGeometry: any;
+    }
+  }
+}
