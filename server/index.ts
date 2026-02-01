@@ -15,7 +15,7 @@ const io = new Server(httpServer, {
     origin: "*", 
     methods: ["GET", "POST"]
   }
-});
+} as any);
 
 const PORT = process.env.PORT || 3000;
 
@@ -32,19 +32,21 @@ const KILL_DISTANCE = 3.0;
 setInterval(() => {
   const playerIds = Object.keys(players);
   
-  // CRITICAL FIX: "Active" means anyone who is IN THE GAME WORLD (Role is NOT NONE).
-  // We exclude Spectators from *starting* the game count logic usually, 
-  // but if we are in WAITING, spectators should probably be converted to Hiders to play.
-  // For now: Active Candidates = HIDER or HUNTER (Waiting or Playing)
-  const validPlayers = playerIds.filter(id => 
-    players[id].role === Role.HIDER || players[id].role === Role.HUNTER
-  );
+  // Count only players who have actively joined the game world (Role != NONE)
+  // We exclude Spectators from triggering a new round, unless they are waiting for next round.
+  const activePlayers = playerIds.filter(id => {
+      const p = players[id];
+      // Anyone who isn't a spectator is a candidate for the next round
+      // If someone joins late, they get Role.HIDER (Lobby mode) which counts here.
+      return p.role !== Role.SPECTATOR;
+  });
+
+  const activeCount = activePlayers.length;
 
   // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
-    // If we have 2 or more players sitting in the lobby (HIDER/HUNTER role), start countdown
-    if (validPlayers.length >= 2) {
-      console.log(`[SERVER] > 2 Players detected (${validPlayers.length}). Starting Countdown.`);
+    if (activeCount >= 2) {
+      console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
@@ -55,13 +57,13 @@ setInterval(() => {
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     
-    // If players drop below 2 during countdown, abort
-    if (validPlayers.length < 2) {
-        console.log("[SERVER] Countdown aborted - player left.");
+    // Check if players left during countdown
+    if (activeCount < 2) {
+        console.log("[SERVER] Not enough players during countdown. Resetting.");
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
         broadcastGameState();
-        io.emit('gameMessage', "Waiting for players...");
+        io.emit('gameMessage', "Waiting for more players...");
     } else if (gameTimer <= 0) {
         startGame();
     } else {
@@ -73,19 +75,20 @@ setInterval(() => {
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
-    // Active checks
-    const livingHunters = validPlayers.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
-    const livingHiders = validPlayers.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
+    // Valid "Living" players
+    const livingHunters = playerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
+    const livingHiders = playerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
     
     // Win Conditions
     let reason = null;
-
-    if (validPlayers.length < 2) {
+    
+    // If everyone left mid-game
+    const totalInGame = livingHunters.length + livingHiders.length + playerIds.filter(id => players[id].isDead).length;
+    if (totalInGame < 2) {
         reason = "Not enough players!";
     }
     else if (livingHunters.length === 0) {
-        // Edge case: Hunter left the game
-        reason = "HIDERS WIN (Hunter Left)";
+        reason = "HIDERS WIN (Hunter Disconnected)";
     } 
     else if (livingHiders.length === 0) {
         reason = "HUNTER WINS";
@@ -97,18 +100,14 @@ setInterval(() => {
     if (reason) {
         endGame(reason);
     } else {
-        broadcastGameState(); // Normal Tick
+        broadcastGameState();
     }
   }
 }, 1000);
 
 function broadcastGameState() {
-    // Calculate survivors for UI
-    const playerIds = Object.keys(players);
-    const survivors = playerIds.filter(id => 
-        players[id].role === Role.HIDER && !players[id].isDead
-    ).length;
-
+    // Count survivors (Active Hiders)
+    const survivors = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead).length;
     io.emit('gameStateUpdate', { 
         phase: gamePhase, 
         timer: gameTimer,
@@ -123,30 +122,20 @@ function startGame() {
 
     const playerIds = Object.keys(players);
     
-    // 1. Reset everyone in the game world to HIDER
+    // 1. RESET: Everyone becomes a HIDER (Alive) first
+    // This clears any previous Spectator status for people who joined mid-round
     playerIds.forEach(id => {
-        const p = players[id];
-        // Reset anyone who is NOT in menu (Role.NONE)
-        if (p.role !== Role.NONE) {
-            p.isDead = false;
-            p.role = Role.HIDER;
-            p.position = { x: 0, y: 10, z: 0 }; // Respawn
-        }
+        players[id].isDead = false;
+        players[id].role = Role.HIDER;
+        players[id].position = { x: 0, y: 10, z: 0 }; 
     });
 
-    // 2. Filter candidates (Must be HIDER now)
-    const candidates = playerIds.filter(id => players[id].role === Role.HIDER);
-    
-    if (candidates.length > 0) {
-        const randomIndex = Math.floor(Math.random() * candidates.length);
-        const hunterId = candidates[randomIndex];
+    // 2. ASSIGN: Pick Random Hunter
+    if (playerIds.length > 0) {
+        const randomIndex = Math.floor(Math.random() * playerIds.length);
+        const hunterId = playerIds[randomIndex];
         players[hunterId].role = Role.HUNTER;
-        console.log(`[SERVER] Assigned Hunter: ${hunterId} (${players[hunterId].deviceId})`);
-    } else {
-        // Should not happen if loop logic is correct
-        console.log("[SERVER] Error: No candidates for Hunter.");
-        gamePhase = GamePhase.WAITING;
-        return;
+        console.log(`[SERVER] Hunter assigned: ${hunterId}`);
     }
 
     io.emit('currentPlayers', players);
@@ -154,26 +143,26 @@ function startGame() {
 }
 
 function endGame(reason: string) {
-    console.log(`[SERVER] Round Over: ${reason}`);
+    console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
     
-    // Check if we still have enough players to play another round immediately
-    const validPlayers = Object.keys(players).filter(id => players[id].role !== Role.NONE);
+    // Reset to Waiting/Countdown
+    // We treat this as "Back to Lobby" but keep players in-world
     
-    if (validPlayers.length >= 2) {
-        console.log("[SERVER] Enough players remaining. Restarting countdown.");
+    const count = Object.keys(players).length;
+    
+    if (count >= 2) {
         gamePhase = GamePhase.COUNTDOWN;
         gameTimer = COUNTDOWN_TIME;
     } else {
-        console.log("[SERVER] Not enough players. Going to Waiting.");
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
     }
 
-    // Reset roles to HIDER (Lobby State) so they count as "Active" for the loop
-    validPlayers.forEach(id => {
-        players[id].role = Role.HIDER; 
+    // Reset everyone to "Lobby Mode" (Hider, Alive)
+    Object.keys(players).forEach(id => {
         players[id].isDead = false;
+        players[id].role = Role.HIDER;
         players[id].position = { x: 0, y: 10, z: 0 };
     });
 
@@ -182,23 +171,22 @@ function endGame(reason: string) {
 }
 
 io.on('connection', (socket) => {
-  const deviceId = socket.handshake.auth.token || 'unknown-device';
-  console.log(`User connected: ${socket.id} (Device: ${deviceId})`);
+  const deviceId = socket.handshake.auth.token || 'unknown';
+  // Note: We do NOT add to 'players' here. Only when they click Play.
 
   socket.on('requestGameStart', () => {
-      // Logic: User clicked "PLAY" in Main Menu
+      // User clicked Play Game
       
-      let initialRole = Role.HIDER;
+      let initialRole = Role.HIDER; // Default "Lobby" role
       
-      // If game is running, they must spec
+      // If a round is actively running, they must spectate
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
       }
-      // If Waiting or Countdown, they join as Hider (Candidate)
-
+      
       players[socket.id] = {
         id: socket.id,
-        deviceId: deviceId, // Store persistent ID
+        deviceId: deviceId,
         position: { x: 0, y: 10, z: 0 },
         rotation: 0,
         animation: 'Idle',
@@ -207,18 +195,17 @@ io.on('connection', (socket) => {
         isDead: false
       };
 
-      console.log(`[SERVER] Player joined game world: ${socket.id} as ${initialRole}`);
+      console.log(`[SERVER] Player joined world: ${socket.id} (${initialRole})`);
       
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
-      
-      // Force an immediate broadcast so the loop picks up the new count faster
       broadcastGameState();
   });
 
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
-    if (p && !p.isDead && p.role !== Role.SPECTATOR && p.role !== Role.NONE) {
+    // Security: Only allow move if they are actually in the list and not dead
+    if (p && !p.isDead && p.role !== Role.SPECTATOR) {
       p.position = position;
       p.rotation = rotation;
       p.animation = animation; 
@@ -228,7 +215,7 @@ io.on('connection', (socket) => {
 
   socket.on('attemptKill', () => {
       const hunter = players[socket.id];
-      if (!hunter || hunter.role !== Role.HUNTER || hunter.isDead) return;
+      if (!hunter || hunter.role !== Role.HUNTER || hunter.isDead || gamePhase !== GamePhase.IN_PROGRESS) return;
 
       const hiders = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead);
       
@@ -239,11 +226,11 @@ io.on('connection', (socket) => {
           const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
           if (dist <= KILL_DISTANCE) {
-              console.log(`[SERVER] Kill: ${hunter.id} killed ${hider.id}`);
+              console.log(`[SERVER] Kill: ${hunter.id} -> ${hider.id}`);
               hider.isDead = true;
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
-              broadcastGameState(); // Update survivor count immediately
+              broadcastGameState(); 
               break; 
           }
       }
@@ -254,10 +241,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
-    delete players[socket.id];
-    io.emit('playerDisconnected', socket.id);
-    broadcastGameState(); // Update count immediately
+    // Only log if they were actually playing
+    if (players[socket.id]) {
+        console.log(`[SERVER] Player left: ${socket.id}`);
+        delete players[socket.id];
+        io.emit('playerDisconnected', socket.id);
+        broadcastGameState();
+    }
   });
 });
 

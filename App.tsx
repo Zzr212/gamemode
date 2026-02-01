@@ -34,7 +34,8 @@ function App() {
   const activePlayers = Object.values(players).filter(p => p.role !== Role.SPECTATOR && !p.isDead);
 
   useEffect(() => {
-    connectSocket();
+    // REMOVED: connectSocket() on mount. 
+    // We only connect when the user clicks Play.
 
     const onConnect = () => setMyId(socket.id || null);
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => setPlayers(serverPlayers);
@@ -59,9 +60,13 @@ function App() {
     };
 
     const onGameMessage = (msg: string) => {
+        // Only show relevant messages
         addNotification(msg);
-        setRoleMessage(msg);
-        setTimeout(() => setRoleMessage(null), 4000);
+        // Don't show large splash text for generic status updates, only big events
+        if (msg.includes("WIN")) {
+            setRoleMessage(msg);
+            setTimeout(() => setRoleMessage(null), 4000);
+        }
     };
 
     const onPlayerKilled = (id: string) => {
@@ -83,10 +88,12 @@ function App() {
     socket.on('playerKilled', onPlayerKilled);
 
     const pingInterval = setInterval(() => {
-        const start = Date.now();
-        socket.emit('pingSync', () => {
-            setPing(Date.now() - start);
-        });
+        if (socket.connected) {
+            const start = Date.now();
+            socket.emit('pingSync', () => {
+                setPing(Date.now() - start);
+            });
+        }
     }, 1000);
 
     return () => {
@@ -102,13 +109,15 @@ function App() {
     };
   }, [appState, myId]);
 
+  // Logic to show Role Splash ONLY when round starts (IN_PROGRESS)
   useEffect(() => {
     if (gamePhase === GamePhase.IN_PROGRESS && myPlayer && !myPlayer.isDead && myPlayer.role !== Role.SPECTATOR) {
+        // Double check this isn't firing repeatedly
         const roleText = myPlayer.role === Role.HUNTER ? "YOU ARE THE HUNTER" : "HIDE!";
         setRoleMessage(roleText);
         setTimeout(() => setRoleMessage(null), 3000);
     }
-  }, [gamePhase, myPlayer?.role]);
+  }, [gamePhase, myPlayer?.role]); // Dependencies ensure it fires when phase changes to IN_PROGRESS
 
   const addNotification = (msg: string) => {
     setNotifications(prev => [...prev.slice(-3), msg]); 
@@ -124,11 +133,21 @@ function App() {
     cameraRotationRef.current.pitch = Math.max(-1.2, Math.min(1.5, newPitch)); 
   };
   const handleJump = () => { jumpRef.current = true; };
+  
   const handlePlayGame = () => {
-      if (!socket.connected) connectSocket();
+      // Connect only on click
+      connectSocket();
       setAppState('GAME');
-      socket.emit('requestGameStart');
+      // Small delay to ensure connection before emitting request (socketService handles buffering but good to be safe)
+      if (socket.connected) {
+          socket.emit('requestGameStart');
+      } else {
+          socket.once('connect', () => {
+              socket.emit('requestGameStart');
+          });
+      }
   };
+  
   const handleKill = () => { if (isHunter) socket.emit('attemptKill'); };
 
   const cycleSpectator = (dir: number) => {
@@ -215,7 +234,9 @@ function App() {
 
                      {/* Role / Ping */}
                     <div className="flex flex-col items-center min-w-[60px]">
-                         {isHunter ? (
+                         {gamePhase !== GamePhase.IN_PROGRESS ? (
+                             <span className="text-xs font-bold text-gray-400">READY</span>
+                         ) : isHunter ? (
                              <span className="text-xs font-black text-red-500 animate-pulse">HUNTER</span>
                          ) : isSpectator ? (
                              <span className="text-xs font-bold text-gray-400">SPECTATOR</span>
@@ -261,8 +282,8 @@ function App() {
                             </button>
                         </div>
 
-                        {/* Kill Button (Hunter Only) */}
-                        {isHunter && (
+                        {/* Kill Button (Hunter Only, only in progress) */}
+                        {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                             <div className="absolute bottom-8 right-28 pointer-events-auto flex flex-col items-center">
                                 <button
                                     onPointerDown={handleKill}
