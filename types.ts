@@ -18,7 +18,8 @@ export enum Role {
 }
 
 export interface PlayerState {
-  id: string;
+  id: string; // Socket ID (temporary session)
+  deviceId: string; // Persistent Device ID
   position: Vector3;
   rotation: number;
   animation: string;
@@ -30,6 +31,7 @@ export interface PlayerState {
 export interface GameStateData {
   phase: GamePhase;
   timer: number; // seconds
+  survivors: number; // Active hiders count
 }
 
 export interface ServerToClientEvents {
@@ -40,7 +42,7 @@ export interface ServerToClientEvents {
   gameStateUpdate: (data: GameStateData) => void;
   playerKilled: (victimId: string) => void;
   roleAssigned: (role: Role) => void;
-  gameMessage: (msg: string) => void; // "Hiders Win", "Hunter Wins"
+  gameMessage: (msg: string) => void; 
 }
 
 export interface ClientToServerEvents {
