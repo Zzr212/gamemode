@@ -40,10 +40,6 @@ setInterval(() => {
     players[id].role === Role.HIDER || players[id].role === Role.HUNTER
   );
 
-  const survivorsCount = validPlayers.filter(id => 
-    players[id].role === Role.HIDER && !players[id].isDead
-  ).length;
-
   // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
     // If we have 2 or more players sitting in the lobby (HIDER/HUNTER role), start countdown
