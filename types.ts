@@ -4,12 +4,32 @@ export interface Vector3 {
   z: number;
 }
 
+export enum GamePhase {
+  WAITING = 'WAITING',
+  COUNTDOWN = 'COUNTDOWN',
+  IN_PROGRESS = 'IN_PROGRESS'
+}
+
+export enum Role {
+  NONE = 'NONE',
+  HUNTER = 'HUNTER',
+  HIDER = 'HIDER',
+  SPECTATOR = 'SPECTATOR'
+}
+
 export interface PlayerState {
   id: string;
   position: Vector3;
-  rotation: number; // Y-axis rotation in radians
-  animation: string; // 'idle' | 'walk' | 'run' | 'jump'
-  color: string; // Helper for visual distinction if model fails
+  rotation: number;
+  animation: string;
+  color: string;
+  role: Role;
+  isDead: boolean;
+}
+
+export interface GameStateData {
+  phase: GamePhase;
+  timer: number; // seconds
 }
 
 export interface ServerToClientEvents {
@@ -17,12 +37,17 @@ export interface ServerToClientEvents {
   newPlayer: (player: PlayerState) => void;
   playerMoved: (player: PlayerState) => void;
   playerDisconnected: (id: string) => void;
+  gameStateUpdate: (data: GameStateData) => void;
+  playerKilled: (victimId: string) => void;
+  roleAssigned: (role: Role) => void;
+  gameMessage: (msg: string) => void; // "Hiders Win", "Hunter Wins"
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
   pingSync: (callback: () => void) => void;
-  requestGameStart: () => void;
+  requestGameStart: () => void; // Player joining from menu
+  attemptKill: () => void; // Hunter clicking kill button
 }
 
 export interface JoystickData {

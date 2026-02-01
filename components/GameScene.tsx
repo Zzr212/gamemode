@@ -2,7 +2,7 @@ import React, { useRef, Suspense, Component, ReactNode, useState, useEffect, use
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
-import { JoystickData, PlayerState, Vector3 } from '../types';
+import { JoystickData, PlayerState, Vector3, Role } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
@@ -23,12 +23,16 @@ interface GameSceneProps {
   jumpPressed: React.MutableRefObject<boolean>;
   players: Record<string, PlayerState>;
   myId: string | null;
+  spectatingId: string | null; // ID of the player we are currently watching
 }
 
 // --- REMOTE PLAYER COMPONENT ---
 const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   const groupRef = useRef<THREE.Group>(null);
   
+  // Don't render spectators or dead players (unless we want ragdolls later)
+  if (data.role === Role.SPECTATOR || data.isDead) return null;
+
   // Set initial position once
   useEffect(() => {
     if (groupRef.current) {
@@ -38,23 +42,18 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
 
   useFrame((_, delta) => {
     if (groupRef.current) {
-      // 1. Position Interpolation (Lerp)
+      // 1. Position Interpolation
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
-      
       const distance = groupRef.current.position.distanceTo(targetPos);
-      // Smoother interpolation logic
       const lerpFactor = distance > 5 ? 1 : 15 * delta; 
-      
       groupRef.current.position.lerp(targetPos, lerpFactor);
 
       // 2. Rotation Interpolation
       let currentRot = groupRef.current.rotation.y;
       let targetRot = data.rotation;
-      
       let diff = targetRot - currentRot;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      
       groupRef.current.rotation.y += diff * 15 * delta;
     }
   });
@@ -62,28 +61,28 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   return (
     <group ref={groupRef}>
       <PlayerModel 
-        key={data.animation} // Remount on animation change for instant transition
+        key={data.animation} 
         position={{x:0, y:0, z:0}} 
         rotation={0} 
         animation={data.animation} 
       />
+      {/* Optional: Add red outline if Hunter? For now kept clean. */}
     </group>
   );
 };
 
 // --- CAMERA CONTROLLER ---
 const CameraController: React.FC<{
-  targetGroup: React.RefObject<THREE.Group>;
+  targetPos: React.MutableRefObject<THREE.Vector3>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
-}> = ({ targetGroup, cameraRotation }) => {
+}> = ({ targetPos, cameraRotation }) => {
   const { camera, scene } = useThree();
   const currentPos = useRef(new THREE.Vector3(0, 10, 10));
   const raycaster = useRef(new THREE.Raycaster());
 
   useFrame(() => {
-    if (!targetGroup.current) return;
-
-    const playerPos = targetGroup.current.position;
+    // Determine where the camera should look
+    const playerPos = targetPos.current;
     
     // Config
     const maxDistance = 7;
@@ -106,6 +105,7 @@ const CameraController: React.FC<{
         origin.z + orbitZ
     );
 
+    // Collision Check for Camera
     const direction = new THREE.Vector3().subVectors(idealPos, origin).normalize();
     raycaster.current.set(origin, direction);
     
@@ -147,7 +147,8 @@ const PlayerController: React.FC<{
   jumpPressed: React.MutableRefObject<boolean>;
   onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
-}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos }) => {
+  targetPosRef: React.MutableRefObject<THREE.Vector3>; // To sync camera
+}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef }) => {
   const { scene } = useThree();
   
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
@@ -160,19 +161,17 @@ const PlayerController: React.FC<{
   const [visualAnimation, setVisualAnimation] = useState('Idle');
   
   const downRaycaster = useRef(new THREE.Raycaster());
-  const wallRaycaster = useRef(new THREE.Raycaster()); // NEW: Horizontal collision
+  const wallRaycaster = useRef(new THREE.Raycaster());
 
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
-  // Tuning
   const MOVE_SPEED = 6.0; 
   const GRAVITY = 18.0;   
   const JUMP_VELOCITY = 8.0; 
   const COLLIDER_NAME = 'ground-collider';
-  
   const CHECK_RADIUS = 0.3; 
-  const MAX_STEP_HEIGHT = 0.6; // Max height we snap up to (knee height)
+  const MAX_STEP_HEIGHT = 0.6;
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
@@ -180,7 +179,7 @@ const PlayerController: React.FC<{
     const { x, y } = joystickData.current;
     const mapObject = scene.getObjectByName(COLLIDER_NAME);
 
-    // 1. Calculate Intent (Speed + Rotation)
+    // 1. Calculate Intent
     const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1;
     let moveX = 0;
     let moveZ = 0;
@@ -195,7 +194,6 @@ const PlayerController: React.FC<{
       moveX = (forwardX + rightX) * MOVE_SPEED * dt;
       moveZ = (forwardZ + rightZ) * MOVE_SPEED * dt;
 
-      // Update Rotation
       if (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001) {
           const targetRotation = Math.atan2(moveX, moveZ);
           let deltaRot = targetRotation - rotation.current;
@@ -205,25 +203,19 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Wall Collision (Horizontal Raycast)
+    // 2. Wall Collision
     let isBlocked = false;
     if (isMoving && mapObject && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
         const moveVector = new THREE.Vector3(moveX, 0, moveZ);
         const moveLength = moveVector.length();
         const moveDir = moveVector.normalize();
         
-        // Raycast from waist height (approx 1.0 unit up) in direction of movement
-        // We add a small buffer (0.4) to the check distance (radius + buffer)
         const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 1.0, 0));
         wallRaycaster.current.set(rayOrigin, moveDir);
-        
-        // Far distance = Radius + intended move distance
         wallRaycaster.current.far = 0.5 + moveLength; 
         
         const wallIntersects = wallRaycaster.current.intersectObject(mapObject, true);
-        if (wallIntersects.length > 0) {
-            isBlocked = true;
-        }
+        if (wallIntersects.length > 0) isBlocked = true;
     }
 
     if (!isBlocked) {
@@ -231,33 +223,27 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
-    // 3. Ground Detection (Gravity & Snapping)
+    // 3. Ground Detection
     let groundY = -100;
-    
     if (mapObject) {
         const origins = [
-            new THREE.Vector3(0, 0, 0), // Center
-            new THREE.Vector3(CHECK_RADIUS, 0, 0), // Right
-            new THREE.Vector3(-CHECK_RADIUS, 0, 0), // Left
-            new THREE.Vector3(0, 0, CHECK_RADIUS), // Front
-            new THREE.Vector3(0, 0, -CHECK_RADIUS) // Back
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(CHECK_RADIUS, 0, 0),
+            new THREE.Vector3(-CHECK_RADIUS, 0, 0),
+            new THREE.Vector3(0, 0, CHECK_RADIUS),
+            new THREE.Vector3(0, 0, -CHECK_RADIUS)
         ];
 
         let maxHitY = -100;
         let foundValidGround = false;
 
         for (const offset of origins) {
-            // Raycast origin: Position + Offset + High enough to detect floor
             const rayOrigin = pos.current.clone().add(offset).add(new THREE.Vector3(0, 2, 0));
             downRaycaster.current.set(rayOrigin, new THREE.Vector3(0, -1, 0));
             
             const intersects = downRaycaster.current.intersectObject(mapObject, true);
             if (intersects.length > 0) {
                 const hitY = intersects[0].point.y;
-                
-                // IMPORTANT: Prevent snapping to roof (climbing bug)
-                // Only treat it as ground if it's not too far above our current feet
-                // Logic: If hitY is > currentY + step_height, it's a wall/ceiling, ignore it.
                 if (hitY - pos.current.y <= MAX_STEP_HEIGHT) {
                     if (hitY > maxHitY) {
                         maxHitY = hitY;
@@ -269,7 +255,7 @@ const PlayerController: React.FC<{
         if (foundValidGround) groundY = maxHitY;
     }
 
-    // Jump Logic
+    // Jump
     if (jumpPressed.current && isGrounded.current) {
         velocity.current.y = JUMP_VELOCITY;
         isGrounded.current = false;
@@ -278,14 +264,13 @@ const PlayerController: React.FC<{
         jumpPressed.current = false;
     }
 
-    // Apply Gravity / Snap to Floor
+    // Gravity
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= GRAVITY * dt;
         pos.current.y += velocity.current.y * dt;
         isGrounded.current = false;
     } else {
         velocity.current.y = 0;
-        // Smooth snap or hard snap? Hard snap prevents jitter.
         pos.current.y = groundY;
         isGrounded.current = true;
     }
@@ -298,17 +283,19 @@ const PlayerController: React.FC<{
         velocity.current.set(0,0,0);
     }
 
-    // Update Visuals
+    // Visual Updates
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // Animation Logic
+    // Sync camera target ref
+    targetPosRef.current.copy(pos.current);
+
+    // Animation
     let newAnim = 'Idle';
     if (!isGrounded.current) newAnim = 'Jump'; 
     else if (isMoving && !isBlocked) newAnim = 'Run';
 
     const animChanged = animationRef.current !== newAnim;
-
     if (animChanged) {
         animationRef.current = newAnim;
         setVisualAnimation(newAnim);
@@ -325,24 +312,42 @@ const PlayerController: React.FC<{
   });
 
   return (
-    <>
-      <group ref={playerGroupRef} position={[initialPos.x, initialPos.y, initialPos.z]}>
-          <group ref={modelRotationGroupRef}>
-             <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
-          </group>
-      </group>
-      <CameraController targetGroup={playerGroupRef} cameraRotation={cameraRotation} />
-    </>
+    <group ref={playerGroupRef} position={[initialPos.x, initialPos.y, initialPos.z]}>
+        <group ref={modelRotationGroupRef}>
+            <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
+        </group>
+    </group>
   );
 };
 
+// --- SPECTATOR CONTROLLER ---
+// Just updates the camera target ref based on remote player position
+const SpectatorController: React.FC<{
+    targetId: string | null;
+    players: Record<string, PlayerState>;
+    targetPosRef: React.MutableRefObject<THREE.Vector3>;
+}> = ({ targetId, players, targetPosRef }) => {
+    useFrame((_, delta) => {
+        if (!targetId || !players[targetId]) return;
+        const p = players[targetId];
+        const target = new THREE.Vector3(p.position.x, p.position.y, p.position.z);
+        // Smoothly move camera target point
+        targetPosRef.current.lerp(target, 10 * delta);
+    });
+    return null;
+}
+
 // --- MAIN GAME SCENE ---
-export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId }) => {
+export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId }) => {
   const [dpr, setDpr] = useState(1.5); 
+  // We share a mutable vector for camera focus, regardless if it's local player or spectator target
+  const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
 
   const handlePlayerMove = useCallback((pos: Vector3, rot: number, anim: string) => {
     socket.emit('move', pos, rot, anim);
   }, []);
+
+  const isSpectating = !myId || !players[myId] || players[myId].role === Role.SPECTATOR || players[myId].isDead;
 
   return (
     <>
@@ -351,10 +356,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.8 }} 
         shadows
       >
-        <PerformanceMonitor 
-             onIncline={() => setDpr(1.5)} 
-             onDecline={() => setDpr(1)} 
-        />
+        <PerformanceMonitor onIncline={() => setDpr(1.5)} onDecline={() => setDpr(1)} />
 
         <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={100} onUpdate={c => c.lookAt(0, 0, 0)}/>
 
@@ -362,42 +364,42 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
         <color attach="background" args={['#eefbff']} />
 
         <ambientLight intensity={0.6} />
-        <directionalLight 
-          position={[50, 80, 30]} 
-          intensity={1.5} 
-          castShadow 
-          shadow-mapSize={[2048, 2048]} 
-          shadow-bias={-0.0001}
-        />
-
-        <Sky 
-            sunPosition={[100, 20, 100]} 
-            turbidity={0.5} 
-            rayleigh={0.5} 
-            mieCoefficient={0.005} 
-            mieDirectionalG={0.8} 
-        />
+        <directionalLight position={[50, 80, 30]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0001}/>
+        <Sky sunPosition={[100, 20, 100]} turbidity={0.5} rayleigh={0.5} mieCoefficient={0.005} mieDirectionalG={0.8} />
         
         <Suspense fallback={null}>
           <ModelErrorBoundary>
             <MapModel />
 
-            {/* Render Other Players */}
+            {/* Remote Players */}
             {Object.values(players).map((p) => {
               if (p.id === myId) return null;
               return <RemotePlayer key={p.id} data={p} />;
             })}
 
-            {/* Render Local Player */}
-            {myId && players[myId] && (
-              <PlayerController 
-                  joystickData={joystickData} 
-                  cameraRotation={cameraRotation} 
-                  jumpPressed={jumpPressed}
-                  onMove={handlePlayerMove}
-                  initialPos={players[myId].position}
-              />
+            {/* Logic Router */}
+            {!isSpectating ? (
+                // Alive and playing
+                <PlayerController 
+                    joystickData={joystickData} 
+                    cameraRotation={cameraRotation} 
+                    jumpPressed={jumpPressed}
+                    onMove={handlePlayerMove}
+                    initialPos={players[myId].position}
+                    targetPosRef={cameraTargetRef}
+                />
+            ) : (
+                // Spectating or Dead
+                <SpectatorController 
+                    targetId={spectatingId} 
+                    players={players} 
+                    targetPosRef={cameraTargetRef}
+                />
             )}
+
+            {/* Camera handles looking at the targetRef */}
+            <CameraController targetPos={cameraTargetRef} cameraRotation={cameraRotation} />
+            
           </ModelErrorBoundary>
         </Suspense>
       </Canvas>
