@@ -22,6 +22,9 @@ function App() {
   const [spectatingIndex, setSpectatingIndex] = useState<number>(0);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [ping, setPing] = useState<number>(0);
+  
+  // UI State for Start Button Error
+  const [startError, setStartError] = useState(false);
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
@@ -149,6 +152,16 @@ function App() {
   };
   
   const handleKill = () => { if (isHunter) socket.emit('attemptKill'); };
+  
+  const handleStartMatch = () => {
+      // survivors count in WAITING phase equals total active players
+      if (survivors < 2) {
+          setStartError(true);
+          setTimeout(() => setStartError(false), 500);
+          return;
+      }
+      socket.emit('startMatch');
+  };
 
   const cycleSpectator = (dir: number) => {
       if (activePlayers.length === 0) return;
@@ -206,18 +219,33 @@ function App() {
             <div className="absolute top-2 left-0 right-0 px-4 z-40 pointer-events-none flex justify-center items-start">
                 
                 {/* Main Info Box */}
-                <div className="flex items-center gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg">
+                <div className="flex items-center gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg pointer-events-auto">
                     
-                    {/* Phase / Timer */}
-                    <div className="flex flex-col items-center min-w-[60px]">
-                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-                            {gamePhase === GamePhase.WAITING ? 'LOBBY' : 
-                             gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
-                        </span>
-                        <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
-                            {gamePhase === GamePhase.WAITING ? '--:--' : 
-                             gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
-                        </span>
+                    {/* Phase / Timer OR START BUTTON */}
+                    <div className="flex flex-col items-center justify-center min-w-[60px] h-[40px]">
+                        {gamePhase === GamePhase.WAITING ? (
+                             <button
+                                onPointerDown={handleStartMatch}
+                                className={`
+                                    text-xs font-black text-white px-3 py-1.5 rounded-md shadow-lg transition-all
+                                    ${startError 
+                                        ? 'bg-red-600 animate-pulse ring-2 ring-red-400' 
+                                        : 'bg-gradient-to-br from-green-500 to-emerald-700 hover:scale-105 active:scale-95 border border-green-400/30'
+                                    }
+                                `}
+                             >
+                                START
+                             </button>
+                        ) : (
+                            <>
+                                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+                                    {gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
+                                </span>
+                                <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
+                                    {gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
+                                </span>
+                            </>
+                        )}
                     </div>
 
                     {/* Divider */}

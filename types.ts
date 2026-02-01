@@ -52,6 +52,7 @@ export interface ClientToServerEvents {
   pingSync: (callback: () => void) => void;
   requestGameStart: () => void; // Player joining from menu
   attemptKill: () => void; // Hunter clicking kill button
+  startMatch: () => void; // Manual start trigger
 }
 
 export interface JoystickData {
@@ -63,21 +64,7 @@ export interface JoystickData {
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      group: any;
-      mesh: any;
-      primitive: any;
-      instancedMesh: any;
-      ambientLight: any;
-      pointLight: any;
-      directionalLight: any;
-      spotLight: any;
-      fog: any;
-      color: any;
-      meshBasicMaterial: any;
-      meshStandardMaterial: any;
-      circleGeometry: any;
-      sphereGeometry: any;
-      ringGeometry: any;
+      [elemName: string]: any;
     }
   }
 }

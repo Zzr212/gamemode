@@ -32,25 +32,19 @@ const KILL_DISTANCE = 3.0;
 setInterval(() => {
   const playerIds = Object.keys(players);
   
-  // Count only players who have actively joined the game world (Role != NONE)
-  // We exclude Spectators from triggering a new round, unless they are waiting for next round.
   const activePlayers = playerIds.filter(id => {
       const p = players[id];
-      // Anyone who isn't a spectator is a candidate for the next round
-      // If someone joins late, they get Role.HIDER (Lobby mode) which counts here.
       return p.role !== Role.SPECTATOR;
   });
 
   const activeCount = activePlayers.length;
 
-  // 1. WAITING -> COUNTDOWN
+  // 1. WAITING
+  // REMOVED: Automatic transition to COUNTDOWN. 
+  // Now handled by 'startMatch' event below.
   if (gamePhase === GamePhase.WAITING) {
-    if (activeCount >= 2) {
-      console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
-      gamePhase = GamePhase.COUNTDOWN;
-      gameTimer = COUNTDOWN_TIME;
+      // Just keep broadcasting state so clients know how many people are there
       broadcastGameState();
-    }
   }
 
   // 2. COUNTDOWN
@@ -123,7 +117,6 @@ function startGame() {
     const playerIds = Object.keys(players);
     
     // 1. RESET: Everyone becomes a HIDER (Alive) first
-    // This clears any previous Spectator status for people who joined mid-round
     playerIds.forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
@@ -146,18 +139,10 @@ function endGame(reason: string) {
     console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
     
-    // Reset to Waiting/Countdown
-    // We treat this as "Back to Lobby" but keep players in-world
-    
-    const count = Object.keys(players).length;
-    
-    if (count >= 2) {
-        gamePhase = GamePhase.COUNTDOWN;
-        gameTimer = COUNTDOWN_TIME;
-    } else {
-        gamePhase = GamePhase.WAITING;
-        gameTimer = 0;
-    }
+    // Reset to Waiting immediately
+    // Players have to press START again to play another round
+    gamePhase = GamePhase.WAITING;
+    gameTimer = 0;
 
     // Reset everyone to "Lobby Mode" (Hider, Alive)
     Object.keys(players).forEach(id => {
@@ -172,14 +157,12 @@ function endGame(reason: string) {
 
 io.on('connection', (socket) => {
   const deviceId = socket.handshake.auth.token || 'unknown';
-  // Note: We do NOT add to 'players' here. Only when they click Play.
 
   socket.on('requestGameStart', () => {
-      // User clicked Play Game
+      // User clicked Play Game in Menu (Joining Lobby)
       
-      let initialRole = Role.HIDER; // Default "Lobby" role
+      let initialRole = Role.HIDER;
       
-      // If a round is actively running, they must spectate
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
       }
@@ -202,9 +185,25 @@ io.on('connection', (socket) => {
       broadcastGameState();
   });
 
+  // NEW: Manual Round Start Trigger
+  socket.on('startMatch', () => {
+      if (gamePhase !== GamePhase.WAITING) return;
+
+      const activePlayers = Object.values(players).filter(p => p.role !== Role.SPECTATOR);
+      
+      if (activePlayers.length >= 2) {
+          console.log(`[SERVER] Match started by ${socket.id}`);
+          gamePhase = GamePhase.COUNTDOWN;
+          gameTimer = COUNTDOWN_TIME;
+          broadcastGameState();
+      } else {
+          // Optional: Could send specific error to client, but client handles UI blink
+          console.log(`[SERVER] Start failed: not enough players (${activePlayers.length})`);
+      }
+  });
+
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
-    // Security: Only allow move if they are actually in the list and not dead
     if (p && !p.isDead && p.role !== Role.SPECTATOR) {
       p.position = position;
       p.rotation = rotation;
@@ -241,7 +240,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    // Only log if they were actually playing
     if (players[socket.id]) {
         console.log(`[SERVER] Player left: ${socket.id}`);
         delete players[socket.id];
