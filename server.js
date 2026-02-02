@@ -120,6 +120,7 @@ const Role = {
 let players = {}; 
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
+let lastHunterUserId = null; // Track who was hunter last time
 
 const ROUND_TIME = 300; // 5 minutes
 const COUNTDOWN_TIME = 10;
@@ -154,8 +155,7 @@ setInterval(() => {
 setInterval(() => {
   const playerIds = Object.keys(players);
   
-  // Only count ACTUALLY connected players for start logic, 
-  // but disconnected players still "exist" in the world until timeout
+  // Only count ACTUALLY connected players for start logic
   const connectedPlayers = playerIds.filter(id => !players[id].isDisconnected);
   
   const activePlayers = connectedPlayers.filter(id => {
@@ -197,8 +197,6 @@ setInterval(() => {
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
-    // Valid "Living" players (include disconnected ones to avoid instant win if someone refreshes)
-    // However, if they are disconnected, they are easy targets.
     const allPlayerIds = Object.keys(players);
     const livingHunters = allPlayerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
     const livingHiders = allPlayerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
@@ -206,7 +204,6 @@ setInterval(() => {
     // Win Conditions
     let reason = null;
     
-    // Check total Valid players (connected or disconnected within grace period)
     if (allPlayerIds.length < 2) {
         reason = "Not enough players!";
     }
@@ -249,14 +246,28 @@ function startGame() {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
         players[id].position = { x: 0, y: 10, z: 0 }; 
-        players[id].isDisconnected = false; // Graceful reset if they were stuck
+        players[id].isDisconnected = false; // Ensure reconnection resets this status
     });
 
-    // 2. ASSIGN: Pick Random Hunter
-    if (playerIds.length > 0) {
-        const randomIndex = Math.floor(Math.random() * playerIds.length);
-        const hunterId = playerIds[randomIndex];
+    // 2. ASSIGN: Pick Random Hunter (Avoiding Last Hunter if possible)
+    let candidates = playerIds;
+    
+    // Try to exclude the last hunter if we have enough players (>2)
+    // If only 2 players, we still randomize (50%) or swap depending on logic.
+    // Here we strictly exclude unless they are the only option (which shouldn't happen with >1 players if we do it right, but fallback is safe).
+    if (lastHunterUserId && playerIds.length > 1) {
+        const filtered = playerIds.filter(id => players[id].userId !== lastHunterUserId);
+        // If we have other people, use them. If somehow only the last hunter is here (unlikely in >1), default back to everyone.
+        if (filtered.length > 0) {
+            candidates = filtered;
+        }
+    }
+
+    if (candidates.length > 0) {
+        const randomIndex = Math.floor(Math.random() * candidates.length);
+        const hunterId = candidates[randomIndex];
         players[hunterId].role = Role.HUNTER;
+        lastHunterUserId = players[hunterId].userId; // Memorize for next round
         console.log(`[SERVER] Hunter assigned: ${players[hunterId].username}`);
     }
 
@@ -268,7 +279,6 @@ function endGame(reason) {
     console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
     
-    // Reset Logic
     if (Object.keys(players).length >= 2) {
         gamePhase = GamePhase.COUNTDOWN;
         gameTimer = COUNTDOWN_TIME;
@@ -300,32 +310,28 @@ io.on('connection', (socket) => {
   }
 
   // 1. DUPLICATE CHECK
-  // Check if this userId is already connected on another socket
   const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
   
   if (existingSocketId) {
-      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket ${existingSocketId}.`);
-      // Notify the old socket (optional)
+      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket.`);
       io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
-      // Disconnect the old socket from IO perspective
       const oldSocket = io.sockets.sockets.get(existingSocketId);
       if (oldSocket) oldSocket.disconnect(true);
-      
-      // We will handle the "disconnect" event of the old socket shortly, 
-      // but we want to pre-emptively seize the player object.
   }
 
   // 2. RECONNECTION LOGIC
-  // Check if player object exists (maybe disconnected recently)
-  // We check by userId.
   let playerObj = null;
   const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
 
   if (oldSessionId) {
-      console.log(`[SERVER] ${username} reconnected. Restoring session.`);
+      console.log(`[SERVER] ${username} reconnected. restoring session.`);
       playerObj = players[oldSessionId];
       
-      // Remove old key map
+      // CRITICAL FIX FOR CLONE/GHOST BUG:
+      // Tell all clients to delete the OLD socket ID entity immediately.
+      io.emit('playerDisconnected', oldSessionId);
+
+      // Remove old key from map
       delete players[oldSessionId];
       
       // Update with new Socket ID
@@ -336,9 +342,9 @@ io.on('connection', (socket) => {
       // Assign to new key
       players[socket.id] = playerObj;
 
-      // Send immediate sync
+      // Send immediate sync to everyone including the new socket
       socket.emit('currentPlayers', players);
-      socket.broadcast.emit('playerMoved', playerObj); // Notify others they are back
+      socket.broadcast.emit('newPlayer', playerObj); 
   }
 
   socket.on('requestGameStart', () => {
@@ -410,19 +416,12 @@ io.on('connection', (socket) => {
       }
   });
 
-  socket.on('pingSync', (callback) => {
-    if (typeof callback === 'function') callback(); 
-  });
-
   socket.on('disconnect', () => {
     if (players[socket.id]) {
         console.log(`[SERVER] ${players[socket.id].username} disconnected (Grace Period Started).`);
         // DON'T DELETE immediately. Mark as disconnected.
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
-        
-        // Notify others visually? Maybe ghost them later.
-        // For now, we just keep them in the array but they stop updating.
     }
   });
 });

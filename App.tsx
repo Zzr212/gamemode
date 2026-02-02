@@ -24,7 +24,6 @@ function App() {
   const [roleMessage, setRoleMessage] = useState<string | null>(null);
   const [spectatingIndex, setSpectatingIndex] = useState<number>(0);
   const [notifications, setNotifications] = useState<string[]>([]);
-  const [ping, setPing] = useState<number | string>('-'); // Changed to string/number union for initial state
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
@@ -104,17 +103,6 @@ function App() {
     socket.on('gameMessage', onGameMessage);
     socket.on('playerKilled', onPlayerKilled);
 
-    // Ping Logic
-    const pingInterval = setInterval(() => {
-        if (socket.connected) {
-            const start = Date.now();
-            socket.emit('pingSync', () => {
-                const latency = Date.now() - start;
-                setPing(latency);
-            });
-        }
-    }, 2000); // Increased interval slightly to reduce load
-
     return () => {
         socket.off('connect', onConnect);
         socket.off('forceDisconnect', onForceDisconnect);
@@ -125,9 +113,8 @@ function App() {
         socket.off('gameStateUpdate', onGameStateUpdate);
         socket.off('gameMessage', onGameMessage);
         socket.off('playerKilled', onPlayerKilled);
-        clearInterval(pingInterval);
     };
-  }, [appState, myId, players]); // Removed players from dependency to avoid re-binding listeners on every move
+  }, [appState, myId, players]); 
 
   useEffect(() => {
     if (gamePhase === GamePhase.IN_PROGRESS && myPlayer && !myPlayer.isDead && myPlayer.role !== Role.SPECTATOR) {
@@ -256,7 +243,7 @@ function App() {
 
                     <div className="w-px h-8 bg-white/20"></div>
 
-                     {/* Role / Ping */}
+                     {/* Role */}
                     <div className="flex flex-col items-center min-w-[60px]">
                          {gamePhase !== GamePhase.IN_PROGRESS ? (
                              <span className="text-xs font-bold text-gray-400">READY</span>
@@ -267,7 +254,7 @@ function App() {
                          ) : (
                              <span className="text-xs font-bold text-blue-400">HIDER</span>
                          )}
-                         <span className="text-[10px] text-gray-500 font-mono">{ping}ms</span>
+                         <span className="text-[10px] text-gray-500 font-mono tracking-wider">ROLE</span>
                     </div>
 
                 </div>

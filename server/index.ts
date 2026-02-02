@@ -48,16 +48,44 @@ app.post('/api/login', (req, res) => {
 let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
+let lastHunterUserId: string | null = null;
 
 const ROUND_TIME = 300; // 5 minutes
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
+const AFK_TIMEOUT = 120 * 1000; // 2 minutes
+
+// --- AFK CLEANUP LOOP ---
+setInterval(() => {
+    const now = Date.now();
+    const playerIds = Object.keys(players);
+    let changed = false;
+
+    playerIds.forEach(id => {
+        const p = players[id];
+        if (p.isDisconnected && p.disconnectTime) {
+            if (now - p.disconnectTime > AFK_TIMEOUT) {
+                console.log(`[SERVER] Removing AFK player: ${p.username}`);
+                delete players[id];
+                io.emit('playerDisconnected', id);
+                io.emit('gameMessage', `${p.username} removed (AFK)`);
+                changed = true;
+            }
+        }
+    });
+
+    if (changed) {
+        broadcastGameState();
+    }
+}, 5000);
 
 // --- GAME LOOP (Automatic) ---
 setInterval(() => {
   const playerIds = Object.keys(players);
   
-  const activePlayers = playerIds.filter(id => {
+  const connectedPlayers = playerIds.filter(id => !players[id].isDisconnected);
+
+  const activePlayers = connectedPlayers.filter(id => {
       const p = players[id];
       return p.role !== Role.SPECTATOR;
   });
@@ -97,14 +125,14 @@ setInterval(() => {
     gameTimer--;
 
     // Valid "Living" players
-    const livingHunters = playerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
-    const livingHiders = playerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
+    const allPlayerIds = Object.keys(players);
+    const livingHunters = allPlayerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
+    const livingHiders = allPlayerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
     
     // Win Conditions
     let reason = null;
     
-    const totalInGame = livingHunters.length + livingHiders.length + playerIds.filter(id => players[id].isDead).length;
-    if (totalInGame < 2) {
+    if (allPlayerIds.length < 2) {
         reason = "Not enough players!";
     }
     else if (livingHunters.length === 0) {
@@ -146,13 +174,24 @@ function startGame() {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
         players[id].position = { x: 0, y: 10, z: 0 }; 
+        players[id].isDisconnected = false;
     });
 
-    // 2. ASSIGN: Pick Random Hunter
-    if (playerIds.length > 0) {
-        const randomIndex = Math.floor(Math.random() * playerIds.length);
-        const hunterId = playerIds[randomIndex];
+    // 2. ASSIGN: Pick Random Hunter (Avoid last hunter)
+    let candidates = playerIds;
+    
+    if (lastHunterUserId && playerIds.length > 1) {
+        const filtered = playerIds.filter(id => players[id].userId !== lastHunterUserId);
+        if (filtered.length > 0) {
+            candidates = filtered;
+        }
+    }
+
+    if (candidates.length > 0) {
+        const randomIndex = Math.floor(Math.random() * candidates.length);
+        const hunterId = candidates[randomIndex];
         players[hunterId].role = Role.HUNTER;
+        lastHunterUserId = players[hunterId].userId;
         console.log(`[SERVER] Hunter assigned: ${players[hunterId].username}`);
     }
 
@@ -188,8 +227,56 @@ io.on('connection', (socket) => {
   const userId = socket.handshake.auth.userId || 'guest-' + socket.id;
   const username = socket.handshake.auth.username || 'Guest';
 
+  if (!userId) {
+      console.log("Socket connected without userId, ignoring.");
+      return;
+  }
+
+  // 1. DUPLICATE CHECK
+  const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
+  
+  if (existingSocketId) {
+      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket.`);
+      io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
+      const oldSocket = io.sockets.sockets.get(existingSocketId);
+      if (oldSocket) oldSocket.disconnect(true);
+  }
+
+  // 2. RECONNECTION LOGIC
+  let playerObj = null;
+  const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
+
+  if (oldSessionId) {
+      console.log(`[SERVER] ${username} reconnected. Restoring session.`);
+      playerObj = players[oldSessionId];
+      
+      // FIX CLONE: Tell everyone to remove old ID
+      io.emit('playerDisconnected', oldSessionId);
+
+      // Remove old key
+      delete players[oldSessionId];
+      
+      // Update with new Socket ID
+      playerObj.id = socket.id;
+      playerObj.isDisconnected = false;
+      playerObj.disconnectTime = null;
+      
+      // Assign to new key
+      players[socket.id] = playerObj;
+
+      // Send immediate sync
+      socket.emit('currentPlayers', players);
+      socket.broadcast.emit('newPlayer', playerObj);
+  }
+
   socket.on('requestGameStart', () => {
       // User clicked Play Game in Menu
+      if (players[socket.id]) {
+          console.log(`[SERVER] ${username} requested start (Existing Session).`);
+          socket.emit('currentPlayers', players);
+          broadcastGameState();
+          return;
+      }
       
       let initialRole = Role.HIDER;
       if (gamePhase === GamePhase.IN_PROGRESS) {
@@ -219,7 +306,7 @@ io.on('connection', (socket) => {
 
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
-    if (p && !p.isDead && p.role !== Role.SPECTATOR) {
+    if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = position;
       p.rotation = rotation;
       p.animation = animation; 
@@ -250,16 +337,11 @@ io.on('connection', (socket) => {
       }
   });
 
-  socket.on('pingSync', (callback) => {
-    if (typeof callback === 'function') callback(); 
-  });
-
   socket.on('disconnect', () => {
     if (players[socket.id]) {
         console.log(`[SERVER] ${players[socket.id].username} left.`);
-        delete players[socket.id];
-        io.emit('playerDisconnected', socket.id);
-        broadcastGameState();
+        players[socket.id].isDisconnected = true;
+        players[socket.id].disconnectTime = Date.now();
     }
   });
 });
