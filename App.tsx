@@ -39,9 +39,8 @@ function App() {
   const myPlayer = myId ? players[myId] : null;
   const isSpectator = !myPlayer || myPlayer.role === Role.SPECTATOR || myPlayer.isDead;
   const isHunter = myPlayer?.role === Role.HUNTER && !myPlayer.isDead;
-  const isAdmin = myPlayer?.isAdmin === true;
 
-  const activePlayers = (Object.values(players) as PlayerState[]).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead);
+  const activePlayers = (Object.values(players) as PlayerState[]).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
 
   // --- FULLSCREEN HELPER ---
   const triggerFullScreen = () => {
@@ -89,14 +88,6 @@ function App() {
         window.location.reload();
     };
 
-    const onForceRefresh = () => {
-        // Server triggered reload (Shutdown)
-        setRoleMessage("SERVER RESTARTING...");
-        setTimeout(() => {
-            window.location.reload();
-        }, 3000);
-    };
-
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => setPlayers(serverPlayers);
     const onNewPlayer = (player: PlayerState) => {
         setPlayers((prev) => ({ ...prev, [player.id]: player }));
@@ -119,7 +110,7 @@ function App() {
     const onGameMessage = (msg: string) => {
         if (msg.includes("WIN") || msg.includes("Time")) {
             setRoleMessage(msg);
-            setTimeout(() => setRoleMessage(null), 4000); 
+            setTimeout(() => setRoleMessage(null), 4000); // Show for duration of Game Over buffer
         }
     };
 
@@ -138,7 +129,6 @@ function App() {
 
     socket.on('connect', onConnect);
     socket.on('forceDisconnect', onForceDisconnect);
-    socket.on('forceRefresh', onForceRefresh);
     socket.on('currentPlayers', onCurrentPlayers);
     socket.on('newPlayer', onNewPlayer);
     socket.on('playerMoved', onPlayerMoved);
@@ -151,7 +141,6 @@ function App() {
     return () => {
         socket.off('connect', onConnect);
         socket.off('forceDisconnect', onForceDisconnect);
-        socket.off('forceRefresh', onForceRefresh);
         socket.off('currentPlayers', onCurrentPlayers);
         socket.off('newPlayer', onNewPlayer);
         socket.off('playerMoved', onPlayerMoved);
@@ -253,16 +242,6 @@ function App() {
                 />
             </div>
 
-            {/* DEVELOPER HUD */}
-            {isAdmin && myPlayer && (
-                <div className="absolute top-2 left-2 md:left-4 z-50 bg-black/70 p-2 rounded border border-green-500 font-mono text-[10px] text-green-400 pointer-events-none">
-                    <div className="font-bold underline mb-1">DEV MODE</div>
-                    <div>X: {myPlayer.position.x.toFixed(2)}</div>
-                    <div>Y: {myPlayer.position.y.toFixed(2)}</div>
-                    <div>Z: {myPlayer.position.z.toFixed(2)}</div>
-                </div>
-            )}
-
             {roleMessage && (
                 <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
                     <h1 className="text-5xl font-black text-white tracking-tighter drop-shadow-[0_4px_4px_rgba(0,0,0,1)] animate-bounce text-center px-4 bg-black/40 backdrop-blur-sm rounded-xl py-2">
@@ -285,8 +264,8 @@ function App() {
                 }}
             >
                 {/* TOP BAR */}
-                <div className="w-full flex justify-between items-start pt-2 px-2 md:px-4 pl-20 md:pl-4"> 
-                    {/* CHAT - Added padding to left to avoid collision with Dev HUD if active */}
+                <div className="w-full flex justify-between items-start pt-2 px-2 md:px-4">
+                    {/* CHAT */}
                     <div className="pointer-events-auto flex flex-col items-start w-1/3 z-50">
                         {!isChatOpen && (
                             <button 

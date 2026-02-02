@@ -8,7 +8,7 @@ export enum GamePhase {
   WAITING = 'WAITING',
   COUNTDOWN = 'COUNTDOWN',
   IN_PROGRESS = 'IN_PROGRESS',
-  GAME_OVER = 'GAME_OVER'
+  GAME_OVER = 'GAME_OVER' // New buffer phase
 }
 
 export enum Role {
@@ -25,24 +25,25 @@ export interface UserProfile {
 }
 
 export interface PlayerState {
-  id: string; // Socket ID
+  id: string; // Socket ID (temporary session)
   userId: string; // Persistent Account ID
   username: string;
-  deviceId: string; 
+  deviceId: string; // Persistent Device ID (fallback)
   position: Vector3;
   rotation: number;
   animation: string;
   color: string;
   role: Role;
   isDead: boolean;
-  isAdmin?: boolean; // New Developer Status
-  isDisconnected?: boolean; // Handle disconnection state
+  // New fields for reconnection logic
+  isDisconnected: boolean;
+  disconnectTime?: number;
 }
 
 export interface GameStateData {
   phase: GamePhase;
-  timer: number;
-  survivors: number;
+  timer: number; // seconds
+  survivors: number; // Active hiders count
 }
 
 export interface ChatMessage {
@@ -62,9 +63,8 @@ export interface ServerToClientEvents {
   playerKilled: (victimId: string) => void;
   roleAssigned: (role: Role) => void;
   gameMessage: (msg: string) => void; 
-  chatMessage: (msg: ChatMessage) => void; 
-  forceDisconnect: (reason: string) => void;
-  forceRefresh: () => void; // New event for server shutdown
+  chatMessage: (msg: ChatMessage) => void; // New chat event
+  forceDisconnect: (reason: string) => void; 
 }
 
 export interface ClientToServerEvents {
@@ -73,7 +73,7 @@ export interface ClientToServerEvents {
   requestGameStart: () => void; 
   attemptKill: () => void; 
   chatMessage: (text: string) => void; 
-  leaveGame: () => void; 
+  leaveGame: () => void; // Explicit leave event
 }
 
 export interface JoystickData {
@@ -85,49 +85,37 @@ export interface JoystickData {
 declare global {
   namespace JSX {
     interface IntrinsicElements {
+      // Containers
       group: any;
       primitive: any;
+      
+      // Objects
       mesh: any;
       instancedMesh: any;
+      
+      // Geometries
       boxGeometry: any;
       circleGeometry: any;
       sphereGeometry: any;
       ringGeometry: any;
       planeGeometry: any;
+      
+      // Materials
       meshBasicMaterial: any;
       meshStandardMaterial: any;
+      
+      // Lights
       ambientLight: any;
       directionalLight: any;
       pointLight: any;
       spotLight: any;
+      
+      // Scene & Effects
       fog: any;
       color: any;
+
+      // Catch-all
       [elemName: string]: any;
-    }
-  }
-  
-  namespace React {
-    namespace JSX {
-      interface IntrinsicElements {
-        group: any;
-        primitive: any;
-        mesh: any;
-        instancedMesh: any;
-        boxGeometry: any;
-        circleGeometry: any;
-        sphereGeometry: any;
-        ringGeometry: any;
-        planeGeometry: any;
-        meshBasicMaterial: any;
-        meshStandardMaterial: any;
-        ambientLight: any;
-        directionalLight: any;
-        pointLight: any;
-        spotLight: any;
-        fog: any;
-        color: any;
-        [elemName: string]: any;
-      }
     }
   }
 }
