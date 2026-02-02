@@ -127,6 +127,16 @@ const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; // 2 minutes
 
+// Utility: Random Spawn Position
+// Prevents players from spawning inside each other (Air Stuck Bug)
+const getRandomSpawn = () => {
+    return {
+        x: (Math.random() * 10) - 5, // -5 to 5
+        y: 10, // Start high enough
+        z: (Math.random() * 10) - 5  // -5 to 5
+    };
+};
+
 // --- AFK CLEANUP LOOP ---
 setInterval(() => {
     const now = Date.now();
@@ -245,19 +255,15 @@ function startGame() {
     playerIds.forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = { x: 0, y: 10, z: 0 }; 
-        players[id].isDisconnected = false; // Ensure reconnection resets this status
+        players[id].position = getRandomSpawn(); // Randomize spawn
+        players[id].isDisconnected = false; 
     });
 
     // 2. ASSIGN: Pick Random Hunter (Avoiding Last Hunter if possible)
     let candidates = playerIds;
     
-    // Try to exclude the last hunter if we have enough players (>2)
-    // If only 2 players, we still randomize (50%) or swap depending on logic.
-    // Here we strictly exclude unless they are the only option (which shouldn't happen with >1 players if we do it right, but fallback is safe).
     if (lastHunterUserId && playerIds.length > 1) {
         const filtered = playerIds.filter(id => players[id].userId !== lastHunterUserId);
-        // If we have other people, use them. If somehow only the last hunter is here (unlikely in >1), default back to everyone.
         if (filtered.length > 0) {
             candidates = filtered;
         }
@@ -267,7 +273,7 @@ function startGame() {
         const randomIndex = Math.floor(Math.random() * candidates.length);
         const hunterId = candidates[randomIndex];
         players[hunterId].role = Role.HUNTER;
-        lastHunterUserId = players[hunterId].userId; // Memorize for next round
+        lastHunterUserId = players[hunterId].userId; 
         console.log(`[SERVER] Hunter assigned: ${players[hunterId].username}`);
     }
 
@@ -291,7 +297,7 @@ function endGame(reason) {
     Object.keys(players).forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = { x: 0, y: 10, z: 0 };
+        players[id].position = getRandomSpawn(); // Randomize spawn
     });
 
     io.emit('currentPlayers', players);
@@ -327,28 +333,20 @@ io.on('connection', (socket) => {
       console.log(`[SERVER] ${username} reconnected. restoring session.`);
       playerObj = players[oldSessionId];
       
-      // CRITICAL FIX FOR CLONE/GHOST BUG:
-      // Tell all clients to delete the OLD socket ID entity immediately.
       io.emit('playerDisconnected', oldSessionId);
-
-      // Remove old key from map
       delete players[oldSessionId];
       
-      // Update with new Socket ID
       playerObj.id = socket.id;
       playerObj.isDisconnected = false;
       playerObj.disconnectTime = null;
       
-      // Assign to new key
       players[socket.id] = playerObj;
 
-      // Send immediate sync to everyone including the new socket
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', playerObj); 
   }
 
   socket.on('requestGameStart', () => {
-      // If we just reconnected, we might already have a role/body.
       if (players[socket.id]) {
           console.log(`[SERVER] ${username} requested start (Existing Session).`);
           socket.emit('currentPlayers', players);
@@ -356,7 +354,6 @@ io.on('connection', (socket) => {
           return;
       }
 
-      // New Player Logic
       let initialRole = Role.HIDER;
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
@@ -367,7 +364,7 @@ io.on('connection', (socket) => {
         userId: userId,
         username: username,
         deviceId: deviceId,
-        position: { x: 0, y: 10, z: 0 },
+        position: getRandomSpawn(), // Randomize spawn
         rotation: 0,
         animation: 'Idle',
         color: '#fff',
@@ -419,14 +416,12 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (players[socket.id]) {
         console.log(`[SERVER] ${players[socket.id].username} disconnected (Grace Period Started).`);
-        // DON'T DELETE immediately. Mark as disconnected.
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
     }
   });
 });
 
-// Serve Static Files (Production)
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));

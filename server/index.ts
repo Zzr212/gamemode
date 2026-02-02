@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json() as any); // Enable JSON body parsing for login/register
+app.use(express.json() as any); 
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -50,10 +50,19 @@ let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
 
-const ROUND_TIME = 300; // 5 minutes
+const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
-const AFK_TIMEOUT = 120 * 1000; // 2 minutes
+const AFK_TIMEOUT = 120 * 1000; 
+
+// Utility: Random Spawn
+const getRandomSpawn = () => {
+    return {
+        x: (Math.random() * 10) - 5, 
+        y: 10,
+        z: (Math.random() * 10) - 5 
+    };
+};
 
 // --- AFK CLEANUP LOOP ---
 setInterval(() => {
@@ -79,7 +88,7 @@ setInterval(() => {
     }
 }, 5000);
 
-// --- GAME LOOP (Automatic) ---
+// --- GAME LOOP ---
 setInterval(() => {
   const playerIds = Object.keys(players);
   
@@ -92,7 +101,6 @@ setInterval(() => {
 
   const activeCount = activePlayers.length;
 
-  // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
     if (activeCount >= 2) {
       console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
@@ -101,12 +109,9 @@ setInterval(() => {
       broadcastGameState();
     }
   }
-
-  // 2. COUNTDOWN
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     
-    // Check if players left during countdown
     if (activeCount < 2) {
         console.log("[SERVER] Not enough players during countdown. Resetting.");
         gamePhase = GamePhase.WAITING;
@@ -119,17 +124,13 @@ setInterval(() => {
         broadcastGameState();
     }
   }
-
-  // 3. IN_PROGRESS
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
-    // Valid "Living" players
     const allPlayerIds = Object.keys(players);
     const livingHunters = allPlayerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
     const livingHiders = allPlayerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
     
-    // Win Conditions
     let reason = null;
     
     if (allPlayerIds.length < 2) {
@@ -169,15 +170,13 @@ function startGame() {
 
     const playerIds = Object.keys(players);
     
-    // 1. RESET: Everyone becomes a HIDER (Alive) first
     playerIds.forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = { x: 0, y: 10, z: 0 }; 
+        players[id].position = getRandomSpawn();
         players[id].isDisconnected = false;
     });
 
-    // 2. ASSIGN: Pick Random Hunter (Avoid last hunter)
     let candidates = playerIds;
     
     if (lastHunterUserId && playerIds.length > 1) {
@@ -211,11 +210,10 @@ function endGame(reason: string) {
         gameTimer = 0;
     }
 
-    // Reset everyone to "Lobby Mode" (Hider, Alive)
     Object.keys(players).forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = { x: 0, y: 10, z: 0 };
+        players[id].position = getRandomSpawn();
     });
 
     io.emit('currentPlayers', players);
@@ -232,7 +230,6 @@ io.on('connection', (socket) => {
       return;
   }
 
-  // 1. DUPLICATE CHECK
   const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
   
   if (existingSocketId) {
@@ -242,7 +239,6 @@ io.on('connection', (socket) => {
       if (oldSocket) oldSocket.disconnect(true);
   }
 
-  // 2. RECONNECTION LOGIC
   let playerObj = null;
   const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
 
@@ -250,27 +246,20 @@ io.on('connection', (socket) => {
       console.log(`[SERVER] ${username} reconnected. Restoring session.`);
       playerObj = players[oldSessionId];
       
-      // FIX CLONE: Tell everyone to remove old ID
       io.emit('playerDisconnected', oldSessionId);
-
-      // Remove old key
       delete players[oldSessionId];
       
-      // Update with new Socket ID
       playerObj.id = socket.id;
       playerObj.isDisconnected = false;
-      playerObj.disconnectTime = undefined; // Fixed type error here
+      playerObj.disconnectTime = undefined;
       
-      // Assign to new key
       players[socket.id] = playerObj;
 
-      // Send immediate sync
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', playerObj);
   }
 
   socket.on('requestGameStart', () => {
-      // User clicked Play Game in Menu
       if (players[socket.id]) {
           console.log(`[SERVER] ${username} requested start (Existing Session).`);
           socket.emit('currentPlayers', players);
@@ -288,7 +277,7 @@ io.on('connection', (socket) => {
         userId: userId,
         username: username,
         deviceId: deviceId,
-        position: { x: 0, y: 10, z: 0 },
+        position: getRandomSpawn(),
         rotation: 0,
         animation: 'Idle',
         color: '#fff',

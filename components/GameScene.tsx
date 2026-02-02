@@ -44,9 +44,6 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       const distance = groupRef.current.position.distanceTo(targetPos);
       
-      // If disconnected, maybe fade them out or stop updating? 
-      // For now we just lerp to where they were last seen.
-      
       const lerpFactor = distance > 5 ? 1 : 15 * delta; 
       groupRef.current.position.lerp(targetPos, lerpFactor);
 
@@ -179,19 +176,14 @@ const PlayerController: React.FC<{
 
   // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
   useEffect(() => {
-    // If phase is WAITING, ensure velocity is killed (Game Over reset)
     if (gamePhase === GamePhase.WAITING) {
         velocity.current.set(0, 0, 0);
     }
-
-    // If server position (initialPos) is very different from local pos, treat as teleport/respawn
-    // This happens when the Game restarts (Hunter gets moved to 0,10,0)
     const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
     if (dist > 5.0) {
         console.log("Teleporting player (Respawn/Reset detected)");
         pos.current.set(initialPos.x, initialPos.y, initialPos.z);
         velocity.current.set(0, 0, 0);
-        // Force sync logic to send new position immediately
         lastSendTime.current = 0; 
     }
   }, [initialPos.x, initialPos.y, initialPos.z, gamePhase]);
@@ -226,19 +218,33 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Wall Collision
+    // 2. Wall Collision (ENHANCED: Multi-Ray & Back-origin)
     let isBlocked = false;
     if (isMoving && mapObject && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
         const moveVector = new THREE.Vector3(moveX, 0, moveZ);
         const moveLength = moveVector.length();
         const moveDir = moveVector.normalize();
         
-        const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, 1.0, 0));
-        wallRaycaster.current.set(rayOrigin, moveDir);
-        wallRaycaster.current.far = 0.5 + moveLength; 
+        // Check at multiple heights: Ankle (0.2), Hip (0.9), Head (1.6)
+        // Also start the ray slightly BEHIND the player (-0.2) to catch thin walls they are already touching
+        const checkHeights = [0.2, 0.9, 1.6];
         
-        const wallIntersects = wallRaycaster.current.intersectObject(mapObject, true);
-        if (wallIntersects.length > 0) isBlocked = true;
+        for (const h of checkHeights) {
+            if (isBlocked) break;
+
+            const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, h, 0));
+            // Move origin backwards slightly against the movement direction
+            rayOrigin.sub(moveDir.clone().multiplyScalar(0.2));
+
+            wallRaycaster.current.set(rayOrigin, moveDir);
+            // Ray length = Backwards Offset (0.2) + Body Radius (0.3) + Movement + Buffer (0.2)
+            wallRaycaster.current.far = 0.2 + 0.3 + moveLength + 0.2; 
+            
+            const wallIntersects = wallRaycaster.current.intersectObject(mapObject, true);
+            if (wallIntersects.length > 0) {
+                 isBlocked = true;
+            }
+        }
     }
 
     if (!isBlocked) {
@@ -301,8 +307,8 @@ const PlayerController: React.FC<{
     // Respawn Floor (Void check)
     if (pos.current.y < -20) {
         pos.current.y = 10;
-        pos.current.x = 0;
-        pos.current.z = 0;
+        pos.current.x = (Math.random() * 10) - 5; // Reshuffle locally if fell
+        pos.current.z = (Math.random() * 10) - 5;
         velocity.current.set(0,0,0);
     }
 

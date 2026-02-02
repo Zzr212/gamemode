@@ -3,23 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- iOS Fullscreen Config -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    
     <title>Multiplayer Mobile 3D</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Force fixed full dimensions to prevent elastic scrolling and white borders */
+        /* dVH is critical for iOS Safari address bar behavior */
         html, body { 
             margin: 0; 
             padding: 0; 
             width: 100%; 
-            height: 100%; 
+            height: 100%;
+            height: 100dvh; /* Dynamic Viewport Height */
             overflow: hidden; 
             background-color: #000; 
             touch-action: none; 
-            position: fixed; /* Critical for mobile web apps */
+            position: fixed; 
+            overscroll-behavior: none;
         }
         #root {
             width: 100%;
             height: 100%;
+            height: 100dvh;
         }
     </style>
   <script type="importmap">
