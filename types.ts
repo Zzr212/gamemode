@@ -1,4 +1,4 @@
-import 'react';
+import React from 'react';
 
 export interface Vector3 {
   x: number;
@@ -9,7 +9,8 @@ export interface Vector3 {
 export enum GamePhase {
   WAITING = 'WAITING',
   COUNTDOWN = 'COUNTDOWN',
-  IN_PROGRESS = 'IN_PROGRESS'
+  IN_PROGRESS = 'IN_PROGRESS',
+  GAME_OVER = 'GAME_OVER' // New buffer phase
 }
 
 export enum Role {
@@ -82,39 +83,43 @@ export interface JoystickData {
   y: number; // -1 to 1
 }
 
-// React Three Fiber JSX elements
+// React Three Fiber JSX elements augmentation
+interface ThreeElements {
+  // Containers
+  group: any;
+  primitive: any;
+  
+  // Objects
+  mesh: any;
+  instancedMesh: any;
+  
+  // Geometries
+  boxGeometry: any;
+  circleGeometry: any;
+  sphereGeometry: any;
+  ringGeometry: any;
+  planeGeometry: any;
+  
+  // Materials
+  meshBasicMaterial: any;
+  meshStandardMaterial: any;
+  
+  // Lights
+  ambientLight: any;
+  directionalLight: any;
+  pointLight: any;
+  spotLight: any;
+  
+  // Scene & Effects
+  fog: any;
+  color: any;
+
+  // Catch-all
+  [elemName: string]: any;
+}
+
 declare global {
   namespace JSX {
-    interface IntrinsicElements {
-      // Containers
-      group: any;
-      primitive: any;
-      
-      // Objects
-      mesh: any;
-      instancedMesh: any;
-      
-      // Geometries
-      circleGeometry: any;
-      sphereGeometry: any;
-      ringGeometry: any;
-      
-      // Materials
-      meshBasicMaterial: any;
-      meshStandardMaterial: any;
-      
-      // Lights
-      ambientLight: any;
-      directionalLight: any;
-      pointLight: any;
-      spotLight: any;
-      
-      // Scene & Effects
-      fog: any;
-      color: any;
-
-      // Catch-all
-      [elemName: string]: any;
-    }
+    interface IntrinsicElements extends ThreeElements {}
   }
 }

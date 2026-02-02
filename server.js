@@ -52,17 +52,17 @@ app.post('/api/login', (req, res) => {
     } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
-const GamePhase = { WAITING: 'WAITING', COUNTDOWN: 'COUNTDOWN', IN_PROGRESS: 'IN_PROGRESS' };
+const GamePhase = { WAITING: 'WAITING', COUNTDOWN: 'COUNTDOWN', IN_PROGRESS: 'IN_PROGRESS', GAME_OVER: 'GAME_OVER' };
 const Role = { NONE: 'NONE', HUNTER: 'HUNTER', HIDER: 'HIDER', SPECTATOR: 'SPECTATOR' };
 
 let players = {}; 
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
 let lastHunterUserId = null; 
-let isResetting = false;
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
+const GAME_OVER_TIME = 4;
 const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
@@ -95,7 +95,7 @@ setInterval(() => {
   const activeCount = activePlayers.length;
 
   if (gamePhase === GamePhase.WAITING) {
-    if (activeCount >= 2 && !isResetting) {
+    if (activeCount >= 2) {
       console.log(`[SERVER] Countdown Started.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
@@ -116,7 +116,7 @@ setInterval(() => {
         broadcastGameState();
     }
   }
-  else if (gamePhase === GamePhase.IN_PROGRESS && !isResetting) {
+  else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
     const allIds = Object.keys(players);
     const hunters = allIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
@@ -131,6 +131,29 @@ setInterval(() => {
     if (reason) endGame(reason);
     else broadcastGameState();
   }
+  else if (gamePhase === GamePhase.GAME_OVER) {
+      gameTimer--;
+      if (gameTimer <= 0) {
+          console.log("[SERVER] Buffer finished. Resetting.");
+          if (Object.keys(players).length >= 2) {
+            gamePhase = GamePhase.COUNTDOWN;
+            gameTimer = COUNTDOWN_TIME;
+          } else {
+            gamePhase = GamePhase.WAITING;
+            gameTimer = 0;
+          }
+          Object.keys(players).forEach(id => {
+              players[id].isDead = false;
+              players[id].role = Role.HIDER;
+              players[id].position = getRandomSpawn();
+              players[id].animation = 'Idle';
+          });
+          io.emit('currentPlayers', players);
+          broadcastGameState();
+      } else {
+          broadcastGameState();
+      }
+  }
 }, 1000);
 
 function broadcastGameState() {
@@ -142,7 +165,6 @@ function startGame() {
     console.log(`[SERVER] Game Start.`);
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
-    isResetting = false;
     sendSystemMessage("Game Started!");
 
     const ids = Object.keys(players);
@@ -171,32 +193,15 @@ function startGame() {
 }
 
 function endGame(reason) {
-    if (isResetting) return;
-    isResetting = true;
     console.log(`[SERVER] End Game: ${reason}`);
     io.emit('gameMessage', reason);
     sendSystemMessage(`Round Over: ${reason}`);
     
-    setTimeout(() => {
-        if (Object.keys(players).length >= 2) {
-            gamePhase = GamePhase.COUNTDOWN;
-            gameTimer = COUNTDOWN_TIME;
-        } else {
-            gamePhase = GamePhase.WAITING;
-            gameTimer = 0;
-        }
-
-        Object.keys(players).forEach(id => {
-            players[id].isDead = false;
-            players[id].role = Role.HIDER;
-            players[id].position = getRandomSpawn();
-        });
-
-        isResetting = false;
-        io.emit('currentPlayers', players);
-        broadcastGameState();
-        console.log("[SERVER] Reset complete.");
-    }, 3000);
+    // Set 4s Buffer
+    gamePhase = GamePhase.GAME_OVER;
+    gameTimer = GAME_OVER_TIME;
+    
+    broadcastGameState();
 }
 
 io.on('connection', (socket) => {
@@ -206,26 +211,23 @@ io.on('connection', (socket) => {
 
   if (!userId) return;
 
-  const existing = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
-  if (existing) {
-      io.to(existing).emit('forceDisconnect', 'New login detected');
-      const old = io.sockets.sockets.get(existing);
-      if (old) old.disconnect(true);
-      delete players[existing];
-  }
-
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
   if (oldSid) {
       const p = players[oldSid];
-      delete players[oldSid];
+      delete players[oldSid]; // Remove old key to prevent duplicates
+      
+      const oldSocket = io.sockets.sockets.get(oldSid);
+      if (oldSocket) oldSocket.disconnect(true);
+      
       p.id = socket.id;
       p.isDisconnected = false;
       p.disconnectTime = null;
-      players[socket.id] = p;
+      players[socket.id] = p; // Add new key
+      
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', p);
       sendSystemMessage(`${username} reconnected.`);
-      console.log(`[SERVER] Reconnect: ${username}`);
+      console.log(`[SERVER] Reconnect Swap: ${username}`);
   }
 
   socket.on('requestGameStart', () => {
@@ -234,13 +236,18 @@ io.on('connection', (socket) => {
           broadcastGameState();
           return;
       }
-      const role = gamePhase === GamePhase.IN_PROGRESS ? Role.SPECTATOR : Role.HIDER;
+      
+      let initialRole = Role.SPECTATOR;
+      if (gamePhase === GamePhase.WAITING || gamePhase === GamePhase.COUNTDOWN) {
+          initialRole = Role.HIDER;
+      }
+
       players[socket.id] = {
         id: socket.id,
         userId, username, deviceId,
         position: getRandomSpawn(),
         rotation: 0, animation: 'Idle', color: '#fff',
-        role, isDead: false, isDisconnected: false
+        role: initialRole, isDead: false, isDisconnected: false
       };
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -251,6 +258,8 @@ io.on('connection', (socket) => {
 
   socket.on('move', (pos, rot, anim) => {
     const p = players[socket.id];
+    if (gamePhase === GamePhase.GAME_OVER) return; // Freeze during buffer
+    
     if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = pos;
       p.rotation = rot;

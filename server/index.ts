@@ -52,10 +52,10 @@ let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
-let isResetting = false; // Prevent multiple end game triggers
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
+const GAME_OVER_TIME = 4; // 4 Seconds buffer after round ends
 const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
@@ -102,7 +102,7 @@ setInterval(() => {
     }
 }, 5000);
 
-// --- GAME LOOP ---
+// --- MAIN GAME LOOP ---
 setInterval(() => {
   const playerIds = Object.keys(players);
   
@@ -115,17 +115,20 @@ setInterval(() => {
 
   const activeCount = activePlayers.length;
 
+  // 1. WAITING
   if (gamePhase === GamePhase.WAITING) {
-    if (activeCount >= 2 && !isResetting) {
+    if (activeCount >= 2) {
       console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
     }
   }
+  // 2. COUNTDOWN (10s)
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     
+    // Check if players left during countdown
     if (activeCount < 2) {
         console.log("[SERVER] Not enough players during countdown. Resetting.");
         gamePhase = GamePhase.WAITING;
@@ -138,7 +141,8 @@ setInterval(() => {
         broadcastGameState();
     }
   }
-  else if (gamePhase === GamePhase.IN_PROGRESS && !isResetting) {
+  // 3. IN PROGRESS
+  else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
     const allPlayerIds = Object.keys(players);
@@ -166,6 +170,36 @@ setInterval(() => {
         broadcastGameState();
     }
   }
+  // 4. GAME OVER (Buffer State - 4s)
+  else if (gamePhase === GamePhase.GAME_OVER) {
+      gameTimer--;
+      
+      // Once buffer is done, RESET and go to COUNTDOWN
+      if (gameTimer <= 0) {
+          console.log("[SERVER] Buffer ended. Respawning all and starting Countdown.");
+          
+          if (Object.keys(players).length >= 2) {
+            gamePhase = GamePhase.COUNTDOWN;
+            gameTimer = COUNTDOWN_TIME;
+          } else {
+            gamePhase = GamePhase.WAITING;
+            gameTimer = 0;
+          }
+
+          // Full Respawn Logic
+          Object.keys(players).forEach(id => {
+              players[id].isDead = false;
+              players[id].role = Role.HIDER; // Everyone resets to Hider for countdown
+              players[id].position = getRandomSpawn();
+              players[id].animation = 'Idle';
+          });
+          
+          io.emit('currentPlayers', players);
+          broadcastGameState();
+      } else {
+          broadcastGameState();
+      }
+  }
 }, 1000);
 
 function broadcastGameState() {
@@ -181,11 +215,11 @@ function startGame() {
     console.log("[SERVER] Game Started!");
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
-    isResetting = false;
     sendSystemMessage("Game Started! Hunter chosen.");
 
     const playerIds = Object.keys(players);
     
+    // Set everyone to Hider first
     playerIds.forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
@@ -193,8 +227,8 @@ function startGame() {
         players[id].isDisconnected = false;
     });
 
+    // Pick Hunter
     let candidates = playerIds;
-    
     if (lastHunterUserId && playerIds.length > 1) {
         const filtered = playerIds.filter(id => players[id].userId !== lastHunterUserId);
         if (filtered.length > 0) {
@@ -215,38 +249,20 @@ function startGame() {
 }
 
 function endGame(reason: string) {
-    if (isResetting) return; // Prevent double firing
-    isResetting = true;
+    // Only enter GAME_OVER if coming from IN_PROGRESS
+    if (gamePhase !== GamePhase.IN_PROGRESS) return;
 
-    console.log(`[SERVER] Game End: ${reason}`);
+    console.log(`[SERVER] Round Ended: ${reason}. Entering 4s Buffer.`);
     
-    // 1. Notify Clients Immediately
+    // Switch to Buffer Phase
+    gamePhase = GamePhase.GAME_OVER;
+    gameTimer = GAME_OVER_TIME;
+    
     io.emit('gameMessage', reason);
     sendSystemMessage(`Round Over: ${reason}`);
-
-    // 2. DELAY RESETS (Bug Fix for Hunter Glitch)
-    // Wait 3 seconds so the client can process the win state before we jerk the camera back to spawn
-    setTimeout(() => {
-        if (Object.keys(players).length >= 2) {
-            gamePhase = GamePhase.COUNTDOWN;
-            gameTimer = COUNTDOWN_TIME;
-        } else {
-            gamePhase = GamePhase.WAITING;
-            gameTimer = 0;
-        }
-
-        // Reset positions
-        Object.keys(players).forEach(id => {
-            players[id].isDead = false;
-            players[id].role = Role.HIDER;
-            players[id].position = getRandomSpawn();
-        });
-
-        isResetting = false;
-        io.emit('currentPlayers', players);
-        broadcastGameState();
-        console.log("[SERVER] Positions reset. Returning to Lobby/Countdown.");
-    }, 3000);
+    
+    // We do NOT reset positions here. We wait for the buffer to finish.
+    broadcastGameState();
 }
 
 io.on('connection', (socket) => {
@@ -259,40 +275,43 @@ io.on('connection', (socket) => {
       return;
   }
 
-  // Check for duplicate active connection
-  const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
+  // --- RECONNECTION & ANTI-CLONE LOGIC ---
   
-  if (existingSocketId) {
-      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket.`);
-      io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
-      const oldSocket = io.sockets.sockets.get(existingSocketId);
-      if (oldSocket) oldSocket.disconnect(true);
-      // Clean up the old entry immediately
-      delete players[existingSocketId];
-  }
+  // 1. Check if this userId already has an entry in `players`
+  // We search by userId, NOT socket.id, to find ghosts or lost connections
+  const oldSocketId = Object.keys(players).find(id => players[id].userId === userId);
 
-  // Check for disconnected session to restore
-  let playerObj = null;
-  const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
+  if (oldSocketId) {
+      console.log(`[SERVER] ${username} reconnected. Swapping socket ${oldSocketId} -> ${socket.id}`);
+      
+      // Grab data
+      const playerData = players[oldSocketId];
+      
+      // CRITICAL: Delete the old key to prevent cloning
+      delete players[oldSocketId];
+      
+      // Update data with new socket ID
+      playerData.id = socket.id;
+      playerData.isDisconnected = false;
+      playerData.disconnectTime = undefined;
+      
+      // Re-insert with new key
+      players[socket.id] = playerData;
 
-  if (oldSessionId) {
-      console.log(`[SERVER] ${username} reconnected. Restoring session.`);
-      playerObj = players[oldSessionId];
-      
-      delete players[oldSessionId]; // Remove old key
-      
-      playerObj.id = socket.id;
-      playerObj.isDisconnected = false;
-      playerObj.disconnectTime = undefined;
-      
-      players[socket.id] = playerObj;
+      // Force disconnect the old socket if it's still hanging around
+      const oldSocket = io.sockets.sockets.get(oldSocketId);
+      if (oldSocket) {
+          oldSocket.disconnect(true);
+      }
 
       socket.emit('currentPlayers', players);
-      socket.broadcast.emit('newPlayer', playerObj);
+      socket.broadcast.emit('newPlayer', playerData);
       sendSystemMessage(`${username} reconnected.`);
   }
 
+  // --- NEW JOIN REQUEST ---
   socket.on('requestGameStart', () => {
+      // If player already exists (reconnected session), just sync
       if (players[socket.id]) {
           console.log(`[SERVER] ${username} requested start (Existing Session).`);
           socket.emit('currentPlayers', players);
@@ -300,9 +319,13 @@ io.on('connection', (socket) => {
           return;
       }
       
-      let initialRole = Role.HIDER;
-      if (gamePhase === GamePhase.IN_PROGRESS) {
-          initialRole = Role.SPECTATOR;
+      // RULE: 
+      // If WAITING or COUNTDOWN -> Join as HIDER (Spawn)
+      // If IN_PROGRESS or GAME_OVER -> Join as SPECTATOR
+      let initialRole = Role.SPECTATOR;
+      
+      if (gamePhase === GamePhase.WAITING || gamePhase === GamePhase.COUNTDOWN) {
+          initialRole = Role.HIDER;
       }
       
       players[socket.id] = {
@@ -319,7 +342,7 @@ io.on('connection', (socket) => {
         isDisconnected: false
       };
 
-      console.log(`[SERVER] ${username} joined world (ID: ${userId})`);
+      console.log(`[SERVER] ${username} joined world (ID: ${userId}) as ${initialRole}`);
       
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -329,11 +352,13 @@ io.on('connection', (socket) => {
 
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
+    // Don't allow movement during GAME_OVER buffer
+    if (gamePhase === GamePhase.GAME_OVER) return;
+
     if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = position;
       p.rotation = rotation;
       p.animation = animation; 
-      // Broadcast movement
       socket.broadcast.emit('playerMoved', p);
     }
   });

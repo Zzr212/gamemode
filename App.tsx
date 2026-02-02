@@ -108,9 +108,9 @@ function App() {
     };
 
     const onGameMessage = (msg: string) => {
-        if (msg.includes("WIN")) {
+        if (msg.includes("WIN") || msg.includes("Time")) {
             setRoleMessage(msg);
-            setTimeout(() => setRoleMessage(null), 4000);
+            setTimeout(() => setRoleMessage(null), 4000); // Show for duration of Game Over buffer
         }
     };
 
@@ -329,6 +329,7 @@ function App() {
                             <span className="text-[9px] text-gray-400 font-bold uppercase">TIMER</span>
                             <span className={`text-lg font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
                                 {gamePhase === GamePhase.WAITING ? '--' : 
+                                gamePhase === GamePhase.GAME_OVER ? 'END' :
                                 gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
                             </span>
                         </div>
@@ -362,17 +363,17 @@ function App() {
 
                 {/* BOTTOM CONTROLS */}
                 <div className="flex-1 w-full relative pointer-events-none">
-                     {!isSpectator && (
+                     {!isSpectator && gamePhase !== GamePhase.GAME_OVER && (
                         <div className="absolute inset-0 pointer-events-auto z-20">
                             <TouchLook onRotate={handleCameraRotate} />
                         </div>
                      )}
-                     {!isSpectator && (
+                     {!isSpectator && gamePhase !== GamePhase.GAME_OVER && (
                         <div className="absolute bottom-4 left-4 z-40 pointer-events-auto opacity-70 hover:opacity-100 transition-opacity">
                             <Joystick onMove={handleJoystickMove} />
                         </div>
                      )}
-                     {!isSpectator && (
+                     {!isSpectator && gamePhase !== GamePhase.GAME_OVER && (
                         <div className="absolute bottom-4 right-4 z-40 pointer-events-auto flex flex-col items-end gap-4">
                             {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                                 <button
