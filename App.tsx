@@ -36,6 +36,28 @@ function App() {
   // Filter out disconnected players for UI if needed, but keeping them might be good for awareness
   const activePlayers = Object.values(players).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
 
+  // --- FULLSCREEN HELPER ---
+  const triggerFullScreen = () => {
+    try {
+        const docEl = document.documentElement as any;
+        if (docEl.requestFullscreen) {
+            docEl.requestFullscreen().catch(() => {});
+        } else if (docEl.webkitRequestFullscreen) { // Safari/iOS
+            docEl.webkitRequestFullscreen();
+        } else if (docEl.msRequestFullscreen) {
+            docEl.msRequestFullscreen();
+        }
+        
+        // Specifically for mobile, try to lock orientation if API exists
+        if (window.screen.orientation && (window.screen.orientation as any).lock) {
+            (window.screen.orientation as any).lock('landscape').catch(() => {});
+        }
+    } catch (e) {
+        // Fullscreen might fail depending on browser settings/interaction, ignore error
+        console.warn("Fullscreen request failed", e);
+    }
+  };
+
   // --- AUTH HANDLER ---
   const handleLoginSuccess = (user: UserProfile) => {
       setCurrentUser(user);
@@ -62,8 +84,6 @@ function App() {
         const p = players[id];
         setPlayers((prev) => {
             const newPlayers = { ...prev };
-            // Depending on server logic, if it's AFK removal, it deletes.
-            // If it's just socket disconnect, server might not send this event until timeout.
             delete newPlayers[id]; 
             return newPlayers;
         });
@@ -140,6 +160,9 @@ function App() {
   const handleJump = () => { jumpRef.current = true; };
   
   const handlePlayGame = () => {
+      // 1. Attempt Fullscreen immediately on user gesture
+      triggerFullScreen();
+
       if (currentUser) {
           connectSocket(currentUser);
           setAppState('GAME');
@@ -183,14 +206,15 @@ function App() {
   }
 
   // 2. Main Menu or Game (Landscape Enforced)
+  // Use fixed inset-0 to prevent any scrolling quirks on mobile
   return (
-    <div className="w-full h-screen bg-black overflow-hidden relative select-none touch-none">
+    <div className="fixed inset-0 bg-black overflow-hidden select-none touch-none">
       
       {appState === 'MENU' && <MainMenu onPlay={handlePlayGame} />}
 
       {appState === 'GAME' && (
         <>
-            {/* 3D Scene */}
+            {/* 3D Scene - Full viewport */}
             <div className="absolute inset-0 z-0">
                 <GameScene 
                     joystickData={joystickRef} 
@@ -217,102 +241,119 @@ function App() {
                 <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-white/90 rounded-full -translate-x-1/2 -translate-y-1/2 shadow-[0_0_2px_rgba(0,0,0,1)] z-10 pointer-events-none" />
             )}
 
-            {/* COMPACT HUD */}
-            <div className="absolute top-2 left-0 right-0 px-4 z-40 pointer-events-none flex justify-center items-start">
-                <div className="flex items-center gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg pointer-events-auto">
-                    
-                    {/* Phase / Timer */}
-                    <div className="flex flex-col items-center justify-center min-w-[60px] h-[40px]">
-                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-                            {gamePhase === GamePhase.WAITING ? 'LOBBY' : 
-                             gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
-                        </span>
-                        <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
-                            {gamePhase === GamePhase.WAITING ? '--:--' : 
-                             gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
-                        </span>
+            {/* UI LAYER WITH SAFE AREA SUPPORT */}
+            {/* This container respects the notch/home bar areas */}
+            <div 
+                className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between"
+                style={{
+                    paddingTop: 'env(safe-area-inset-top, 20px)',
+                    paddingRight: 'env(safe-area-inset-right, 20px)',
+                    paddingBottom: 'env(safe-area-inset-bottom, 20px)',
+                    paddingLeft: 'env(safe-area-inset-left, 20px)'
+                }}
+            >
+                {/* TOP HUD */}
+                <div className="w-full flex justify-center items-start pt-2 pointer-events-none">
+                    <div className="flex items-center gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg pointer-events-auto">
+                        
+                        {/* Phase / Timer */}
+                        <div className="flex flex-col items-center justify-center min-w-[60px] h-[40px]">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+                                {gamePhase === GamePhase.WAITING ? 'LOBBY' : 
+                                gamePhase === GamePhase.COUNTDOWN ? 'STARTING' : 'TIME'}
+                            </span>
+                            <span className={`text-xl font-mono font-bold leading-none ${timer < 30 && gamePhase === GamePhase.IN_PROGRESS ? 'text-red-500 animate-pulse' : 'text-white'}`}>
+                                {gamePhase === GamePhase.WAITING ? '--:--' : 
+                                gamePhase === GamePhase.COUNTDOWN ? timer : formatTime(timer)}
+                            </span>
+                        </div>
+
+                        <div className="w-px h-8 bg-white/20"></div>
+
+                        {/* Survivors */}
+                        <div className="flex flex-col items-center min-w-[60px]">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">ALIVE</span>
+                            <span className="text-xl font-mono font-bold text-green-400 leading-none">{survivors}</span>
+                        </div>
+
+                        <div className="w-px h-8 bg-white/20"></div>
+
+                        {/* Role */}
+                        <div className="flex flex-col items-center min-w-[60px]">
+                            {gamePhase !== GamePhase.IN_PROGRESS ? (
+                                <span className="text-xs font-bold text-gray-400">READY</span>
+                            ) : isHunter ? (
+                                <span className="text-xs font-black text-red-500 animate-pulse">HUNTER</span>
+                            ) : isSpectator ? (
+                                <span className="text-xs font-bold text-gray-400">SPECTATOR</span>
+                            ) : (
+                                <span className="text-xs font-bold text-blue-400">HIDER</span>
+                            )}
+                            <span className="text-[10px] text-gray-500 font-mono tracking-wider">ROLE</span>
+                        </div>
                     </div>
-
-                    <div className="w-px h-8 bg-white/20"></div>
-
-                    {/* Survivors */}
-                    <div className="flex flex-col items-center min-w-[60px]">
-                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">ALIVE</span>
-                        <span className="text-xl font-mono font-bold text-green-400 leading-none">{survivors}</span>
-                    </div>
-
-                    <div className="w-px h-8 bg-white/20"></div>
-
-                     {/* Role */}
-                    <div className="flex flex-col items-center min-w-[60px]">
-                         {gamePhase !== GamePhase.IN_PROGRESS ? (
-                             <span className="text-xs font-bold text-gray-400">READY</span>
-                         ) : isHunter ? (
-                             <span className="text-xs font-black text-red-500 animate-pulse">HUNTER</span>
-                         ) : isSpectator ? (
-                             <span className="text-xs font-bold text-gray-400">SPECTATOR</span>
-                         ) : (
-                             <span className="text-xs font-bold text-blue-400">HIDER</span>
-                         )}
-                         <span className="text-[10px] text-gray-500 font-mono tracking-wider">ROLE</span>
-                    </div>
-
                 </div>
-            </div>
 
-            {/* Notifications */}
-            <div className="absolute top-16 left-4 z-30 flex flex-col gap-1 pointer-events-none">
-                {notifications.map((msg, i) => (
-                    <div key={i} className="bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur border-l-2 border-blue-500 opacity-90">
-                        {msg}
-                    </div>
-                ))}
-            </div>
+                {/* Notifications (Absolute to top left safe area) */}
+                <div className="absolute top-16 left-4 z-30 flex flex-col gap-1 pointer-events-none" style={{ marginLeft: 'env(safe-area-inset-left)' }}>
+                    {notifications.map((msg, i) => (
+                        <div key={i} className="bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur border-l-2 border-blue-500 opacity-90">
+                            {msg}
+                        </div>
+                    ))}
+                </div>
 
-            {/* Controls */}
-            {!isSpectator && (
-                <div className="absolute inset-0 z-30 flex pointer-events-none">
-                    <div className="w-1/2 h-full flex items-end justify-start p-8 md:p-12">
-                        <div className="pointer-events-auto opacity-70 hover:opacity-100 transition-opacity">
+                {/* BOTTOM CONTROLS LAYER */}
+                {/* We use flex-1 to fill the middle space, then controls at bottom */}
+                <div className="flex-1 w-full relative pointer-events-none">
+                     
+                     {/* Touch Look Area (Invisible, covers whole screen except joystick) */}
+                     {!isSpectator && (
+                        <div className="absolute inset-0 pointer-events-auto z-20">
+                            <TouchLook onRotate={handleCameraRotate} />
+                        </div>
+                     )}
+
+                     {/* Joystick (Bottom Left) */}
+                     {!isSpectator && (
+                        <div className="absolute bottom-4 left-4 z-40 pointer-events-auto opacity-70 hover:opacity-100 transition-opacity">
                             <Joystick onMove={handleJoystickMove} />
                         </div>
-                    </div>
+                     )}
 
-                    <div className="w-1/2 h-full relative pointer-events-auto">
-                        <TouchLook onRotate={handleCameraRotate} />
-                        <div className="absolute bottom-8 right-8 pointer-events-auto">
-                            <button
-                                onPointerDown={handleJump}
-                                className="w-16 h-16 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center backdrop-blur-sm transition-all"
-                            >
-                                <span className="font-bold text-white text-xs">JUMP</span>
-                            </button>
-                        </div>
-
-                        {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
-                            <div className="absolute bottom-8 right-28 pointer-events-auto flex flex-col items-center">
+                     {/* Actions (Bottom Right) */}
+                     {!isSpectator && (
+                        <div className="absolute bottom-4 right-4 z-40 pointer-events-auto flex flex-col items-end gap-4">
+                            {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                                 <button
                                     onPointerDown={handleKill}
-                                    className="w-14 h-14 bg-red-600/60 hover:bg-red-600/80 rounded-full border-2 border-red-500/50 active:bg-red-500 active:scale-95 shadow-[0_0_15px_rgba(220,38,38,0.4)] flex items-center justify-center group backdrop-blur-sm transition-all"
+                                    className="w-16 h-16 bg-red-600/60 hover:bg-red-600/80 rounded-full border-2 border-red-500/50 active:bg-red-500 active:scale-95 shadow-[0_0_15px_rgba(220,38,38,0.4)] flex items-center justify-center group backdrop-blur-sm transition-all mb-2"
                                 >
-                                     <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                                     <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                                 </button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
+                            )}
 
-            {/* Spectator UI */}
-            {isSpectator && (
-                <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center items-center gap-4 pointer-events-auto">
-                    <button onClick={() => cycleSpectator(-1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">←</button>
-                    <div className="bg-black/60 px-4 py-1 rounded-full text-white text-xs font-bold border border-white/10 backdrop-blur">
-                        VIEW: <span className="text-blue-400">{activePlayers.length > 0 ? (activePlayers[spectatingIndex]?.id === myId ? "MYSELF" : activePlayers[spectatingIndex]?.role) : "NONE"}</span>
-                    </div>
-                    <button onClick={() => cycleSpectator(1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">→</button>
+                            <button
+                                onPointerDown={handleJump}
+                                className="w-20 h-20 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center backdrop-blur-sm transition-all"
+                            >
+                                <span className="font-bold text-white text-sm tracking-widest">JUMP</span>
+                            </button>
+                        </div>
+                     )}
+
+                     {/* Spectator Controls (Bottom Center) */}
+                     {isSpectator && (
+                        <div className="absolute bottom-4 left-0 right-0 z-40 flex justify-center items-center gap-4 pointer-events-auto">
+                            <button onClick={() => cycleSpectator(-1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">←</button>
+                            <div className="bg-black/60 px-4 py-1 rounded-full text-white text-xs font-bold border border-white/10 backdrop-blur">
+                                VIEW: <span className="text-blue-400">{activePlayers.length > 0 ? (activePlayers[spectatingIndex]?.id === myId ? "MYSELF" : activePlayers[spectatingIndex]?.role) : "NONE"}</span>
+                            </div>
+                            <button onClick={() => cycleSpectator(1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">→</button>
+                        </div>
+                     )}
                 </div>
-            )}
+            </div>
         </>
       )}
 
