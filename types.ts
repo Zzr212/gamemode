@@ -47,6 +47,14 @@ export interface GameStateData {
   survivors: number; // Active hiders count
 }
 
+export interface ChatMessage {
+  id: string;
+  sender: string;
+  text: string;
+  isSystem: boolean;
+  timestamp: number;
+}
+
 export interface ServerToClientEvents {
   currentPlayers: (players: Record<string, PlayerState>) => void;
   newPlayer: (player: PlayerState) => void;
@@ -56,14 +64,16 @@ export interface ServerToClientEvents {
   playerKilled: (victimId: string) => void;
   roleAssigned: (role: Role) => void;
   gameMessage: (msg: string) => void; 
-  forceDisconnect: (reason: string) => void; // New event to kick duplicates
+  chatMessage: (msg: ChatMessage) => void; // New chat event
+  forceDisconnect: (reason: string) => void; 
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
   pingSync: (callback: () => void) => void;
-  requestGameStart: () => void; // Player joining from menu
-  attemptKill: () => void; // Hunter clicking kill button
+  requestGameStart: () => void; 
+  attemptKill: () => void; 
+  chatMessage: (text: string) => void; // Send chat
 }
 
 export interface JoystickData {

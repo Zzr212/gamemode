@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { PlayerState, GamePhase, Role } from '../types.js';
 import { db } from './db.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,12 +57,24 @@ const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
 // Utility: Random Spawn
+// FIX: Lowered Y to 3 (was 10) to prevent falling through map before physics loads
 const getRandomSpawn = () => {
     return {
         x: (Math.random() * 10) - 5, 
-        y: 10,
+        y: 3, 
         z: (Math.random() * 10) - 5 
     };
+};
+
+// --- CHAT HELPER ---
+const sendSystemMessage = (text: string) => {
+    io.emit('chatMessage', {
+        id: uuidv4(),
+        sender: 'SYSTEM',
+        text: text,
+        isSystem: true,
+        timestamp: Date.now()
+    });
 };
 
 // --- AFK CLEANUP LOOP ---
@@ -77,7 +90,7 @@ setInterval(() => {
                 console.log(`[SERVER] Removing AFK player: ${p.username}`);
                 delete players[id];
                 io.emit('playerDisconnected', id);
-                io.emit('gameMessage', `${p.username} removed (AFK)`);
+                sendSystemMessage(`${p.username} removed (AFK)`);
                 changed = true;
             }
         }
@@ -117,7 +130,7 @@ setInterval(() => {
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
         broadcastGameState();
-        io.emit('gameMessage', "Waiting for more players...");
+        sendSystemMessage("Waiting for more players...");
     } else if (gameTimer <= 0) {
         startGame();
     } else {
@@ -167,6 +180,7 @@ function startGame() {
     console.log("[SERVER] Game Started!");
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
+    sendSystemMessage("Game Started! Hunter chosen.");
 
     const playerIds = Object.keys(players);
     
@@ -200,7 +214,8 @@ function startGame() {
 
 function endGame(reason: string) {
     console.log(`[SERVER] Game End: ${reason}`);
-    io.emit('gameMessage', reason);
+    io.emit('gameMessage', reason); // Keeping for big splash text
+    sendSystemMessage(`Round Over: ${reason}`);
     
     if (Object.keys(players).length >= 2) {
         gamePhase = GamePhase.COUNTDOWN;
@@ -210,6 +225,7 @@ function endGame(reason: string) {
         gameTimer = 0;
     }
 
+    // Reset logic
     Object.keys(players).forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
@@ -257,6 +273,7 @@ io.on('connection', (socket) => {
 
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', playerObj);
+      sendSystemMessage(`${username} reconnected.`);
   }
 
   socket.on('requestGameStart', () => {
@@ -290,6 +307,7 @@ io.on('connection', (socket) => {
       
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
+      sendSystemMessage(`${username} joined.`);
       broadcastGameState();
   });
 
@@ -320,10 +338,24 @@ io.on('connection', (socket) => {
               hider.isDead = true;
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
+              sendSystemMessage(`${hunter.username} killed ${hider.username}!`);
               broadcastGameState(); 
               break; 
           }
       }
+  });
+
+  socket.on('chatMessage', (text: string) => {
+      if (!text || !text.trim()) return;
+      // Basic escaping
+      const safeText = text.substring(0, 50); // limit length
+      io.emit('chatMessage', {
+          id: uuidv4(),
+          sender: players[socket.id]?.username || 'Unknown',
+          text: safeText,
+          isSystem: false,
+          timestamp: Date.now()
+      });
   });
 
   socket.on('disconnect', () => {

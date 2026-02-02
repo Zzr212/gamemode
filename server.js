@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json()); // Enable JSON body parsing for login/register
+app.use(express.json()); 
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -22,259 +22,150 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
-// --- SIMPLE DB IMPLEMENTATION ---
+// --- DB LOGIC REMOVED FOR BREVITY (Assumed same as previous) ---
 const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR);
-}
-
+if (!fs.existsSync(DATA_DIR)) { fs.mkdirSync(DATA_DIR); }
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
-if (!fs.existsSync(USERS_FILE)) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2));
-}
-
+if (!fs.existsSync(USERS_FILE)) { fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2)); }
 const db = {
-    getUsers: () => {
-        try {
-            const data = fs.readFileSync(USERS_FILE, 'utf-8');
-            return JSON.parse(data).users;
-        } catch (e) {
-            return [];
-        }
-    },
-    saveUser: (user) => {
-        const users = db.getUsers();
-        users.push(user);
-        fs.writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2));
-    },
-    findUserByUsername: (username) => {
-        const users = db.getUsers();
-        return users.find(u => u.username.toLowerCase() === username.toLowerCase());
-    },
-    createUser: (username, email, password) => {
-        const newUser = {
-            id: uuidv4(),
-            username,
-            email,
-            password 
-        };
-        db.saveUser(newUser);
-        return { id: newUser.id, username: newUser.username, email: newUser.email };
-    },
-    validateLogin: (username, password) => {
-        const user = db.findUserByUsername(username);
-        if (user && user.password === password) {
-            return { id: user.id, username: user.username, email: user.email };
-        }
-        return null;
-    }
+    getUsers: () => { try { return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8')).users; } catch (e) { return []; } },
+    saveUser: (user) => { const users = db.getUsers(); users.push(user); fs.writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2)); },
+    findUserByUsername: (username) => db.getUsers().find(u => u.username.toLowerCase() === username.toLowerCase()),
+    createUser: (username, email, password) => { const newUser = { id: uuidv4(), username, email, password }; db.saveUser(newUser); return { id: newUser.id, username: newUser.username, email: newUser.email }; },
+    validateLogin: (username, password) => { const user = db.findUserByUsername(username); if (user && user.password === password) return { id: user.id, username: user.username, email: user.email }; return null; }
 };
 
-// --- AUTH API ROUTES ---
 app.post('/api/register', (req, res) => {
     try {
         const { username, email, password } = req.body;
-        if (!username || !email || !password) {
-            return res.status(400).json({ error: 'All fields required' });
-        }
-        if (db.findUserByUsername(username)) {
-            return res.status(400).json({ error: 'Username already taken' });
-        }
+        if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
+        if (db.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
         const user = db.createUser(username, email, password);
         res.json({ success: true, user });
-    } catch (error) {
-        console.error("Register Error:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
+    } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
 app.post('/api/login', (req, res) => {
     try {
         const { username, password } = req.body;
         const user = db.validateLogin(username, password);
-        if (!user) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
+        if (!user) return res.status(401).json({ error: 'Invalid credentials' });
         res.json({ success: true, user });
-    } catch (error) {
-        console.error("Login Error:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
+    } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
-// --- GAME STATE CONSTANTS & VARIABLES ---
-const GamePhase = {
-  WAITING: 'WAITING',
-  COUNTDOWN: 'COUNTDOWN',
-  IN_PROGRESS: 'IN_PROGRESS'
-};
+const GamePhase = { WAITING: 'WAITING', COUNTDOWN: 'COUNTDOWN', IN_PROGRESS: 'IN_PROGRESS' };
+const Role = { NONE: 'NONE', HUNTER: 'HUNTER', HIDER: 'HIDER', SPECTATOR: 'SPECTATOR' };
 
-const Role = {
-  NONE: 'NONE',
-  HUNTER: 'HUNTER',
-  HIDER: 'HIDER',
-  SPECTATOR: 'SPECTATOR'
-};
-
-// Map of socketId -> PlayerState
 let players = {}; 
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
-let lastHunterUserId = null; // Track who was hunter last time
+let lastHunterUserId = null; 
 
-const ROUND_TIME = 300; // 5 minutes
+const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
-const AFK_TIMEOUT = 120 * 1000; // 2 minutes
+const AFK_TIMEOUT = 120 * 1000; 
 
-// Utility: Random Spawn Position
-// Prevents players from spawning inside each other (Air Stuck Bug)
-const getRandomSpawn = () => {
-    return {
-        x: (Math.random() * 10) - 5, // -5 to 5
-        y: 10, // Start high enough
-        z: (Math.random() * 10) - 5  // -5 to 5
-    };
+// FIX: Y lowered to 3
+const getRandomSpawn = () => ({ x: (Math.random() * 10) - 5, y: 3, z: (Math.random() * 10) - 5 });
+
+const sendSystemMessage = (text) => {
+    io.emit('chatMessage', {
+        id: uuidv4(),
+        sender: 'SYSTEM',
+        text: text,
+        isSystem: true,
+        timestamp: Date.now()
+    });
 };
 
-// --- AFK CLEANUP LOOP ---
 setInterval(() => {
     const now = Date.now();
-    const playerIds = Object.keys(players);
     let changed = false;
-
-    playerIds.forEach(id => {
+    Object.keys(players).forEach(id => {
         const p = players[id];
         if (p.isDisconnected && p.disconnectTime) {
             if (now - p.disconnectTime > AFK_TIMEOUT) {
-                console.log(`[SERVER] Removing AFK player: ${p.username}`);
                 delete players[id];
                 io.emit('playerDisconnected', id);
-                io.emit('gameMessage', `${p.username} removed (AFK)`);
+                sendSystemMessage(`${p.username} removed (AFK)`);
                 changed = true;
             }
         }
     });
-
-    if (changed) {
-        broadcastGameState();
-    }
+    if (changed) broadcastGameState();
 }, 5000);
 
-// --- GAME LOOP ---
 setInterval(() => {
-  const playerIds = Object.keys(players);
-  
-  // Only count ACTUALLY connected players for start logic
-  const connectedPlayers = playerIds.filter(id => !players[id].isDisconnected);
-  
-  const activePlayers = connectedPlayers.filter(id => {
-      const p = players[id];
-      return p.role !== Role.SPECTATOR;
-  });
-
+  const activePlayers = Object.keys(players).filter(id => !players[id].isDisconnected && players[id].role !== Role.SPECTATOR);
   const activeCount = activePlayers.length;
 
-  // 1. WAITING -> COUNTDOWN
   if (gamePhase === GamePhase.WAITING) {
     if (activeCount >= 2) {
-      console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
     }
   }
-
-  // 2. COUNTDOWN
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
-    
-    // Check if players left during countdown
     if (activeCount < 2) {
-        console.log("[SERVER] Not enough players during countdown. Resetting.");
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
         broadcastGameState();
-        io.emit('gameMessage', "Waiting for more players...");
+        sendSystemMessage("Waiting for more players...");
     } else if (gameTimer <= 0) {
         startGame();
     } else {
         broadcastGameState();
     }
   }
-
-  // 3. IN_PROGRESS
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
-
-    const allPlayerIds = Object.keys(players);
-    const livingHunters = allPlayerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
-    const livingHiders = allPlayerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
+    const allIds = Object.keys(players);
+    const hunters = allIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
+    const hiders = allIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
     
-    // Win Conditions
     let reason = null;
-    
-    if (allPlayerIds.length < 2) {
-        reason = "Not enough players!";
-    }
-    else if (livingHunters.length === 0) {
-        reason = "HIDERS WIN (Hunter Disconnected)";
-    } 
-    else if (livingHiders.length === 0) {
-        reason = "HUNTER WINS";
-    }
-    else if (gameTimer <= 0) {
-        reason = "HIDERS WIN (Time Limit)";
-    }
+    if (allIds.length < 2) reason = "Not enough players!";
+    else if (hunters.length === 0) reason = "HIDERS WIN (Hunter Disconnected)";
+    else if (hiders.length === 0) reason = "HUNTER WINS";
+    else if (gameTimer <= 0) reason = "HIDERS WIN (Time Limit)";
 
-    if (reason) {
-        endGame(reason);
-    } else {
-        broadcastGameState();
-    }
+    if (reason) endGame(reason);
+    else broadcastGameState();
   }
 }, 1000);
 
 function broadcastGameState() {
     const survivors = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead).length;
-    io.emit('gameStateUpdate', { 
-        phase: gamePhase, 
-        timer: gameTimer,
-        survivors: survivors
-    });
+    io.emit('gameStateUpdate', { phase: gamePhase, timer: gameTimer, survivors: survivors });
 }
 
 function startGame() {
-    console.log("[SERVER] Game Started!");
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
+    sendSystemMessage("Game Started!");
 
-    const playerIds = Object.keys(players);
-    
-    // 1. RESET: Everyone becomes a HIDER (Alive) first
-    playerIds.forEach(id => {
+    const ids = Object.keys(players);
+    ids.forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = getRandomSpawn(); // Randomize spawn
-        players[id].isDisconnected = false; 
+        players[id].position = getRandomSpawn();
+        players[id].isDisconnected = false;
     });
 
-    // 2. ASSIGN: Pick Random Hunter (Avoiding Last Hunter if possible)
-    let candidates = playerIds;
-    
-    if (lastHunterUserId && playerIds.length > 1) {
-        const filtered = playerIds.filter(id => players[id].userId !== lastHunterUserId);
-        if (filtered.length > 0) {
-            candidates = filtered;
-        }
+    let candidates = ids;
+    if (lastHunterUserId && ids.length > 1) {
+        const f = ids.filter(id => players[id].userId !== lastHunterUserId);
+        if (f.length > 0) candidates = f;
     }
 
     if (candidates.length > 0) {
-        const randomIndex = Math.floor(Math.random() * candidates.length);
-        const hunterId = candidates[randomIndex];
-        players[hunterId].role = Role.HUNTER;
-        lastHunterUserId = players[hunterId].userId; 
-        console.log(`[SERVER] Hunter assigned: ${players[hunterId].username}`);
+        const rid = candidates[Math.floor(Math.random() * candidates.length)];
+        players[rid].role = Role.HUNTER;
+        lastHunterUserId = players[rid].userId;
     }
 
     io.emit('currentPlayers', players);
@@ -282,8 +173,8 @@ function startGame() {
 }
 
 function endGame(reason) {
-    console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
+    sendSystemMessage(`Round Over: ${reason}`);
     
     if (Object.keys(players).length >= 2) {
         gamePhase = GamePhase.COUNTDOWN;
@@ -293,99 +184,69 @@ function endGame(reason) {
         gameTimer = 0;
     }
 
-    // Reset everyone to "Lobby Mode" (Hider, Alive)
     Object.keys(players).forEach(id => {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
-        players[id].position = getRandomSpawn(); // Randomize spawn
+        players[id].position = getRandomSpawn();
     });
 
     io.emit('currentPlayers', players);
     broadcastGameState();
 }
 
-// --- SOCKET LOGIC ---
 io.on('connection', (socket) => {
-  const deviceId = socket.handshake.auth.deviceId || 'unknown';
+  const deviceId = socket.handshake.auth.deviceId;
   const userId = socket.handshake.auth.userId;
   const username = socket.handshake.auth.username || 'Guest';
 
-  if (!userId) {
-      console.log("Socket connected without userId, ignoring.");
-      return;
+  if (!userId) return;
+
+  const existing = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
+  if (existing) {
+      io.to(existing).emit('forceDisconnect', 'New login detected');
+      const old = io.sockets.sockets.get(existing);
+      if (old) old.disconnect(true);
   }
 
-  // 1. DUPLICATE CHECK
-  const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
-  
-  if (existingSocketId) {
-      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket.`);
-      io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
-      const oldSocket = io.sockets.sockets.get(existingSocketId);
-      if (oldSocket) oldSocket.disconnect(true);
-  }
-
-  // 2. RECONNECTION LOGIC
-  let playerObj = null;
-  const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
-
-  if (oldSessionId) {
-      console.log(`[SERVER] ${username} reconnected. restoring session.`);
-      playerObj = players[oldSessionId];
-      
-      io.emit('playerDisconnected', oldSessionId);
-      delete players[oldSessionId];
-      
-      playerObj.id = socket.id;
-      playerObj.isDisconnected = false;
-      playerObj.disconnectTime = null;
-      
-      players[socket.id] = playerObj;
-
+  const oldSid = Object.keys(players).find(id => players[id].userId === userId);
+  if (oldSid) {
+      const p = players[oldSid];
+      delete players[oldSid];
+      p.id = socket.id;
+      p.isDisconnected = false;
+      p.disconnectTime = null;
+      players[socket.id] = p;
       socket.emit('currentPlayers', players);
-      socket.broadcast.emit('newPlayer', playerObj); 
+      socket.broadcast.emit('newPlayer', p);
+      sendSystemMessage(`${username} reconnected.`);
   }
 
   socket.on('requestGameStart', () => {
       if (players[socket.id]) {
-          console.log(`[SERVER] ${username} requested start (Existing Session).`);
           socket.emit('currentPlayers', players);
           broadcastGameState();
           return;
       }
-
-      let initialRole = Role.HIDER;
-      if (gamePhase === GamePhase.IN_PROGRESS) {
-          initialRole = Role.SPECTATOR;
-      }
-      
+      const role = gamePhase === GamePhase.IN_PROGRESS ? Role.SPECTATOR : Role.HIDER;
       players[socket.id] = {
         id: socket.id,
-        userId: userId,
-        username: username,
-        deviceId: deviceId,
-        position: getRandomSpawn(), // Randomize spawn
-        rotation: 0,
-        animation: 'Idle',
-        color: '#fff',
-        role: initialRole,
-        isDead: false,
-        isDisconnected: false
+        userId, username, deviceId,
+        position: getRandomSpawn(),
+        rotation: 0, animation: 'Idle', color: '#fff',
+        role, isDead: false, isDisconnected: false
       };
-
-      console.log(`[SERVER] ${username} joined world (ID: ${userId})`);
-      
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
+      sendSystemMessage(`${username} joined.`);
       broadcastGameState();
   });
 
-  socket.on('move', (position, rotation, animation) => {
+  socket.on('move', (pos, rot, anim) => {
     const p = players[socket.id];
     if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
-      p.position = position;
-      p.rotation = rotation;
-      p.animation = animation; 
+      p.position = pos;
+      p.rotation = rot;
+      p.animation = anim; 
       socket.broadcast.emit('playerMoved', p);
     }
   });
@@ -393,29 +254,29 @@ io.on('connection', (socket) => {
   socket.on('attemptKill', () => {
       const hunter = players[socket.id];
       if (!hunter || hunter.role !== Role.HUNTER || hunter.isDead || gamePhase !== GamePhase.IN_PROGRESS) return;
-
       const hiders = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead);
-      
       for (const hider of hiders) {
           const dx = hunter.position.x - hider.position.x;
           const dy = hunter.position.y - hider.position.y;
           const dz = hunter.position.z - hider.position.z;
-          const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-          if (dist <= KILL_DISTANCE) {
-              console.log(`[SERVER] Kill: ${hunter.username} -> ${hider.username}`);
+          if (Math.sqrt(dx*dx + dy*dy + dz*dz) <= KILL_DISTANCE) {
               hider.isDead = true;
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
+              sendSystemMessage(`${hunter.username} killed ${hider.username}`);
               broadcastGameState(); 
               break; 
           }
       }
   });
 
+  socket.on('chatMessage', (text) => {
+      if(!text) return;
+      io.emit('chatMessage', { id: uuidv4(), sender: players[socket.id]?.username || '?', text: text.substring(0,50), isSystem: false, timestamp: Date.now() });
+  });
+
   socket.on('disconnect', () => {
     if (players[socket.id]) {
-        console.log(`[SERVER] ${players[socket.id].username} disconnected (Grace Period Started).`);
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
     }
@@ -425,14 +286,8 @@ io.on('connection', (socket) => {
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
 } else {
-    console.log("WARNING: 'dist' folder not found. Running in API-only mode.");
-    app.get('/', (req, res) => res.send("Server running. Frontend not built."));
+    app.get('/', (req, res) => res.send("Server running (No Build)."));
 }
-
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+httpServer.listen(PORT, () => console.log(`Server running on port ${PORT}`));

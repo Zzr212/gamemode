@@ -176,14 +176,14 @@ const PlayerController: React.FC<{
 
   // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
   useEffect(() => {
-    if (gamePhase === GamePhase.WAITING) {
-        velocity.current.set(0, 0, 0);
-    }
+    // Force reset velocity when phase changes (e.g. End Game reset)
+    velocity.current.set(0, 0, 0);
+    
     const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
     if (dist > 5.0) {
         console.log("Teleporting player (Respawn/Reset detected)");
         pos.current.set(initialPos.x, initialPos.y, initialPos.z);
-        velocity.current.set(0, 0, 0);
+        velocity.current.set(0, 0, 0); // KILL MOMENTUM
         lastSendTime.current = 0; 
     }
   }, [initialPos.x, initialPos.y, initialPos.z, gamePhase]);
@@ -225,25 +225,16 @@ const PlayerController: React.FC<{
         const moveLength = moveVector.length();
         const moveDir = moveVector.normalize();
         
-        // Check at multiple heights: Ankle (0.2), Hip (0.9), Head (1.6)
-        // Also start the ray slightly BEHIND the player (-0.2) to catch thin walls they are already touching
         const checkHeights = [0.2, 0.9, 1.6];
         
         for (const h of checkHeights) {
             if (isBlocked) break;
-
             const rayOrigin = pos.current.clone().add(new THREE.Vector3(0, h, 0));
-            // Move origin backwards slightly against the movement direction
             rayOrigin.sub(moveDir.clone().multiplyScalar(0.2));
-
             wallRaycaster.current.set(rayOrigin, moveDir);
-            // Ray length = Backwards Offset (0.2) + Body Radius (0.3) + Movement + Buffer (0.2)
             wallRaycaster.current.far = 0.2 + 0.3 + moveLength + 0.2; 
-            
             const wallIntersects = wallRaycaster.current.intersectObject(mapObject, true);
-            if (wallIntersects.length > 0) {
-                 isBlocked = true;
-            }
+            if (wallIntersects.length > 0) isBlocked = true;
         }
     }
 
@@ -306,8 +297,8 @@ const PlayerController: React.FC<{
 
     // Respawn Floor (Void check)
     if (pos.current.y < -20) {
-        pos.current.y = 10;
-        pos.current.x = (Math.random() * 10) - 5; // Reshuffle locally if fell
+        pos.current.y = 3; // Reset to safe height
+        pos.current.x = (Math.random() * 10) - 5; 
         pos.current.z = (Math.random() * 10) - 5;
         velocity.current.set(0,0,0);
     }
