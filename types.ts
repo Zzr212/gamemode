@@ -1,3 +1,5 @@
+import * as React from 'react';
+
 export interface Vector3 {
   x: number;
   y: number;
@@ -8,7 +10,7 @@ export enum GamePhase {
   WAITING = 'WAITING',
   COUNTDOWN = 'COUNTDOWN',
   IN_PROGRESS = 'IN_PROGRESS',
-  GAME_OVER = 'GAME_OVER' // New buffer phase
+  GAME_OVER = 'GAME_OVER'
 }
 
 export enum Role {
@@ -25,25 +27,24 @@ export interface UserProfile {
 }
 
 export interface PlayerState {
-  id: string; // Socket ID (temporary session)
+  id: string; // Socket ID
   userId: string; // Persistent Account ID
   username: string;
-  deviceId: string; // Persistent Device ID (fallback)
+  deviceId: string; 
   position: Vector3;
   rotation: number;
   animation: string;
   color: string;
   role: Role;
   isDead: boolean;
-  // New fields for reconnection logic
-  isDisconnected: boolean;
-  disconnectTime?: number;
+  isAdmin?: boolean; // New Developer Status
+  isDisconnected?: boolean; // Handle disconnection state
 }
 
 export interface GameStateData {
   phase: GamePhase;
-  timer: number; // seconds
-  survivors: number; // Active hiders count
+  timer: number;
+  survivors: number;
 }
 
 export interface ChatMessage {
@@ -63,8 +64,9 @@ export interface ServerToClientEvents {
   playerKilled: (victimId: string) => void;
   roleAssigned: (role: Role) => void;
   gameMessage: (msg: string) => void; 
-  chatMessage: (msg: ChatMessage) => void; // New chat event
-  forceDisconnect: (reason: string) => void; 
+  chatMessage: (msg: ChatMessage) => void; 
+  forceDisconnect: (reason: string) => void;
+  forceRefresh: () => void; // New event for server shutdown
 }
 
 export interface ClientToServerEvents {
@@ -73,7 +75,7 @@ export interface ClientToServerEvents {
   requestGameStart: () => void; 
   attemptKill: () => void; 
   chatMessage: (text: string) => void; 
-  leaveGame: () => void; // Explicit leave event
+  leaveGame: () => void; 
 }
 
 export interface JoystickData {
@@ -85,36 +87,23 @@ export interface JoystickData {
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      // Containers
       group: any;
       primitive: any;
-      
-      // Objects
       mesh: any;
       instancedMesh: any;
-      
-      // Geometries
       boxGeometry: any;
       circleGeometry: any;
       sphereGeometry: any;
       ringGeometry: any;
       planeGeometry: any;
-      
-      // Materials
       meshBasicMaterial: any;
       meshStandardMaterial: any;
-      
-      // Lights
       ambientLight: any;
       directionalLight: any;
       pointLight: any;
       spotLight: any;
-      
-      // Scene & Effects
       fog: any;
       color: any;
-
-      // Catch-all
       [elemName: string]: any;
     }
   }
