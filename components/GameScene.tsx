@@ -179,6 +179,11 @@ const PlayerController: React.FC<{
 
   // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
   useEffect(() => {
+    // If phase is WAITING, ensure velocity is killed (Game Over reset)
+    if (gamePhase === GamePhase.WAITING) {
+        velocity.current.set(0, 0, 0);
+    }
+
     // If server position (initialPos) is very different from local pos, treat as teleport/respawn
     // This happens when the Game restarts (Hunter gets moved to 0,10,0)
     const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
@@ -189,7 +194,7 @@ const PlayerController: React.FC<{
         // Force sync logic to send new position immediately
         lastSendTime.current = 0; 
     }
-  }, [initialPos.x, initialPos.y, initialPos.z]);
+  }, [initialPos.x, initialPos.y, initialPos.z, gamePhase]);
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
