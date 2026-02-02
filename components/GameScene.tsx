@@ -2,7 +2,7 @@ import React, { useRef, Suspense, Component, ReactNode, useState, useEffect, use
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
-import { JoystickData, PlayerState, Vector3, Role } from '../types';
+import { JoystickData, PlayerState, Vector3, Role, GamePhase } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
@@ -22,17 +22,17 @@ interface GameSceneProps {
   jumpPressed: React.MutableRefObject<boolean>;
   players: Record<string, PlayerState>;
   myId: string | null;
-  spectatingId: string | null; // ID of the player we are currently watching
+  spectatingId: string | null;
+  gamePhase: GamePhase; // Passed down to detect resets
 }
 
 // --- REMOTE PLAYER COMPONENT ---
 const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   const groupRef = useRef<THREE.Group>(null);
   
-  // Don't render spectators or dead players (unless we want ragdolls later)
+  // Don't render spectators, dead players, or DISCONNECTED players
   if (data.role === Role.SPECTATOR || data.isDead) return null;
 
-  // Set initial position once
   useEffect(() => {
     if (groupRef.current) {
         groupRef.current.position.set(data.position.x, data.position.y, data.position.z);
@@ -41,13 +41,15 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
 
   useFrame((_, delta) => {
     if (groupRef.current) {
-      // 1. Position Interpolation
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       const distance = groupRef.current.position.distanceTo(targetPos);
+      
+      // If disconnected, maybe fade them out or stop updating? 
+      // For now we just lerp to where they were last seen.
+      
       const lerpFactor = distance > 5 ? 1 : 15 * delta; 
       groupRef.current.position.lerp(targetPos, lerpFactor);
 
-      // 2. Rotation Interpolation
       let currentRot = groupRef.current.rotation.y;
       let targetRot = data.rotation;
       let diff = targetRot - currentRot;
@@ -65,7 +67,12 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
         rotation={0} 
         animation={data.animation} 
       />
-      {/* Optional: Add red outline if Hunter? For now kept clean. */}
+      {data.isDisconnected && (
+          <mesh position={[0, 2.5, 0]}>
+              <boxGeometry args={[0.5, 0.2, 0.2]} />
+              <meshBasicMaterial color="red" />
+          </mesh>
+      )}
     </group>
   );
 };
@@ -80,10 +87,8 @@ const CameraController: React.FC<{
   const raycaster = useRef(new THREE.Raycaster());
 
   useFrame(() => {
-    // Determine where the camera should look
     const playerPos = targetPos.current;
     
-    // Config
     const maxDistance = 7;
     const minDistance = 2; 
     const playerHeight = 1.5; 
@@ -104,7 +109,6 @@ const CameraController: React.FC<{
         origin.z + orbitZ
     );
 
-    // Collision Check for Camera
     const direction = new THREE.Vector3().subVectors(idealPos, origin).normalize();
     raycaster.current.set(origin, direction);
     
@@ -146,8 +150,9 @@ const PlayerController: React.FC<{
   jumpPressed: React.MutableRefObject<boolean>;
   onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
-  targetPosRef: React.MutableRefObject<THREE.Vector3>; // To sync camera
-}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef }) => {
+  targetPosRef: React.MutableRefObject<THREE.Vector3>;
+  gamePhase: GamePhase; // Needed for reset detection
+}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef, gamePhase }) => {
   const { scene } = useThree();
   
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
@@ -171,6 +176,20 @@ const PlayerController: React.FC<{
   const COLLIDER_NAME = 'ground-collider';
   const CHECK_RADIUS = 0.3; 
   const MAX_STEP_HEIGHT = 0.6;
+
+  // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
+  useEffect(() => {
+    // If server position (initialPos) is very different from local pos, treat as teleport/respawn
+    // This happens when the Game restarts (Hunter gets moved to 0,10,0)
+    const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
+    if (dist > 5.0) {
+        console.log("Teleporting player (Respawn/Reset detected)");
+        pos.current.set(initialPos.x, initialPos.y, initialPos.z);
+        velocity.current.set(0, 0, 0);
+        // Force sync logic to send new position immediately
+        lastSendTime.current = 0; 
+    }
+  }, [initialPos.x, initialPos.y, initialPos.z]);
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
@@ -274,7 +293,7 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
 
-    // Respawn Floor
+    // Respawn Floor (Void check)
     if (pos.current.y < -20) {
         pos.current.y = 10;
         pos.current.x = 0;
@@ -320,7 +339,6 @@ const PlayerController: React.FC<{
 };
 
 // --- SPECTATOR CONTROLLER ---
-// Just updates the camera target ref based on remote player position
 const SpectatorController: React.FC<{
     targetId: string | null;
     players: Record<string, PlayerState>;
@@ -337,9 +355,8 @@ const SpectatorController: React.FC<{
 }
 
 // --- MAIN GAME SCENE ---
-export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId }) => {
+export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId, gamePhase }) => {
   const [dpr, setDpr] = useState(1.5); 
-  // We share a mutable vector for camera focus, regardless if it's local player or spectator target
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
 
   const handlePlayerMove = useCallback((pos: Vector3, rot: number, anim: string) => {
@@ -386,6 +403,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
                     onMove={handlePlayerMove}
                     initialPos={players[myId].position}
                     targetPosRef={cameraTargetRef}
+                    gamePhase={gamePhase}
                 />
             ) : (
                 // Spectating or Dead

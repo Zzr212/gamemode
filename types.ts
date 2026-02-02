@@ -36,6 +36,9 @@ export interface PlayerState {
   color: string;
   role: Role;
   isDead: boolean;
+  // New fields for reconnection logic
+  isDisconnected: boolean;
+  disconnectTime?: number;
 }
 
 export interface GameStateData {
@@ -53,6 +56,7 @@ export interface ServerToClientEvents {
   playerKilled: (victimId: string) => void;
   roleAssigned: (role: Role) => void;
   gameMessage: (msg: string) => void; 
+  forceDisconnect: (reason: string) => void; // New event to kick duplicates
 }
 
 export interface ClientToServerEvents {

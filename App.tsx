@@ -24,7 +24,7 @@ function App() {
   const [roleMessage, setRoleMessage] = useState<string | null>(null);
   const [spectatingIndex, setSpectatingIndex] = useState<number>(0);
   const [notifications, setNotifications] = useState<string[]>([]);
-  const [ping, setPing] = useState<number>(0);
+  const [ping, setPing] = useState<number | string>('-'); // Changed to string/number union for initial state
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
@@ -34,7 +34,8 @@ function App() {
   const isSpectator = !myPlayer || myPlayer.role === Role.SPECTATOR || myPlayer.isDead;
   const isHunter = myPlayer?.role === Role.HUNTER && !myPlayer.isDead;
 
-  const activePlayers = Object.values(players).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead);
+  // Filter out disconnected players for UI if needed, but keeping them might be good for awareness
+  const activePlayers = Object.values(players).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
 
   // --- AUTH HANDLER ---
   const handleLoginSuccess = (user: UserProfile) => {
@@ -45,17 +46,26 @@ function App() {
   useEffect(() => {
     // Socket Listeners
     const onConnect = () => setMyId(socket.id || null);
+    
+    const onForceDisconnect = (reason: string) => {
+        alert(reason);
+        window.location.reload();
+    };
+
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => setPlayers(serverPlayers);
     const onNewPlayer = (player: PlayerState) => {
         setPlayers((prev) => ({ ...prev, [player.id]: player }));
-        if(appState === 'GAME') addNotification(`${player.username} joined`);
+        // Only show join notification if they aren't just reconnecting silently
+        if(appState === 'GAME' && !player.isDisconnected) addNotification(`${player.username} joined`);
     };
     const onPlayerMoved = (player: PlayerState) => setPlayers((prev) => ({ ...prev, [player.id]: player }));
     const onPlayerDisconnected = (id: string) => {
         const p = players[id];
         setPlayers((prev) => {
             const newPlayers = { ...prev };
-            delete newPlayers[id];
+            // Depending on server logic, if it's AFK removal, it deletes.
+            // If it's just socket disconnect, server might not send this event until timeout.
+            delete newPlayers[id]; 
             return newPlayers;
         });
         if(appState === 'GAME' && p) addNotification(`${p.username} left`);
@@ -85,6 +95,7 @@ function App() {
     };
 
     socket.on('connect', onConnect);
+    socket.on('forceDisconnect', onForceDisconnect);
     socket.on('currentPlayers', onCurrentPlayers);
     socket.on('newPlayer', onNewPlayer);
     socket.on('playerMoved', onPlayerMoved);
@@ -93,17 +104,20 @@ function App() {
     socket.on('gameMessage', onGameMessage);
     socket.on('playerKilled', onPlayerKilled);
 
+    // Ping Logic
     const pingInterval = setInterval(() => {
         if (socket.connected) {
             const start = Date.now();
             socket.emit('pingSync', () => {
-                setPing(Date.now() - start);
+                const latency = Date.now() - start;
+                setPing(latency);
             });
         }
-    }, 1000);
+    }, 2000); // Increased interval slightly to reduce load
 
     return () => {
         socket.off('connect', onConnect);
+        socket.off('forceDisconnect', onForceDisconnect);
         socket.off('currentPlayers', onCurrentPlayers);
         socket.off('newPlayer', onNewPlayer);
         socket.off('playerMoved', onPlayerMoved);
@@ -113,7 +127,7 @@ function App() {
         socket.off('playerKilled', onPlayerKilled);
         clearInterval(pingInterval);
     };
-  }, [appState, myId, players]);
+  }, [appState, myId, players]); // Removed players from dependency to avoid re-binding listeners on every move
 
   useEffect(() => {
     if (gamePhase === GamePhase.IN_PROGRESS && myPlayer && !myPlayer.isDead && myPlayer.role !== Role.SPECTATOR) {
@@ -198,6 +212,7 @@ function App() {
                     players={players} 
                     myId={myId}
                     spectatingId={isSpectator ? getSpectatingId() : null}
+                    gamePhase={gamePhase} // Passed for reset detection
                 />
             </div>
 

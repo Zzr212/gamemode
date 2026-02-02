@@ -23,7 +23,6 @@ const io = new Server(httpServer, {
 const PORT = process.env.PORT || 3000;
 
 // --- SIMPLE DB IMPLEMENTATION ---
-// Ensures we don't need complex typescript compilation for the production server file
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR);
@@ -117,19 +116,49 @@ const Role = {
   SPECTATOR: 'SPECTATOR'
 };
 
-let players = {};
+// Map of socketId -> PlayerState
+let players = {}; 
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
 
 const ROUND_TIME = 300; // 5 minutes
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
+const AFK_TIMEOUT = 120 * 1000; // 2 minutes
 
-// --- GAME LOOP (Automatic) ---
+// --- AFK CLEANUP LOOP ---
+setInterval(() => {
+    const now = Date.now();
+    const playerIds = Object.keys(players);
+    let changed = false;
+
+    playerIds.forEach(id => {
+        const p = players[id];
+        if (p.isDisconnected && p.disconnectTime) {
+            if (now - p.disconnectTime > AFK_TIMEOUT) {
+                console.log(`[SERVER] Removing AFK player: ${p.username}`);
+                delete players[id];
+                io.emit('playerDisconnected', id);
+                io.emit('gameMessage', `${p.username} removed (AFK)`);
+                changed = true;
+            }
+        }
+    });
+
+    if (changed) {
+        broadcastGameState();
+    }
+}, 5000);
+
+// --- GAME LOOP ---
 setInterval(() => {
   const playerIds = Object.keys(players);
   
-  const activePlayers = playerIds.filter(id => {
+  // Only count ACTUALLY connected players for start logic, 
+  // but disconnected players still "exist" in the world until timeout
+  const connectedPlayers = playerIds.filter(id => !players[id].isDisconnected);
+  
+  const activePlayers = connectedPlayers.filter(id => {
       const p = players[id];
       return p.role !== Role.SPECTATOR;
   });
@@ -168,15 +197,17 @@ setInterval(() => {
   else if (gamePhase === GamePhase.IN_PROGRESS) {
     gameTimer--;
 
-    // Valid "Living" players
-    const livingHunters = playerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
-    const livingHiders = playerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
+    // Valid "Living" players (include disconnected ones to avoid instant win if someone refreshes)
+    // However, if they are disconnected, they are easy targets.
+    const allPlayerIds = Object.keys(players);
+    const livingHunters = allPlayerIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
+    const livingHiders = allPlayerIds.filter(id => players[id].role === Role.HIDER && !players[id].isDead);
     
     // Win Conditions
     let reason = null;
     
-    const totalInGame = livingHunters.length + livingHiders.length + playerIds.filter(id => players[id].isDead).length;
-    if (totalInGame < 2) {
+    // Check total Valid players (connected or disconnected within grace period)
+    if (allPlayerIds.length < 2) {
         reason = "Not enough players!";
     }
     else if (livingHunters.length === 0) {
@@ -218,6 +249,7 @@ function startGame() {
         players[id].isDead = false;
         players[id].role = Role.HIDER;
         players[id].position = { x: 0, y: 10, z: 0 }; 
+        players[id].isDisconnected = false; // Graceful reset if they were stuck
     });
 
     // 2. ASSIGN: Pick Random Hunter
@@ -236,6 +268,7 @@ function endGame(reason) {
     console.log(`[SERVER] Game End: ${reason}`);
     io.emit('gameMessage', reason);
     
+    // Reset Logic
     if (Object.keys(players).length >= 2) {
         gamePhase = GamePhase.COUNTDOWN;
         gameTimer = COUNTDOWN_TIME;
@@ -258,12 +291,66 @@ function endGame(reason) {
 // --- SOCKET LOGIC ---
 io.on('connection', (socket) => {
   const deviceId = socket.handshake.auth.deviceId || 'unknown';
-  const userId = socket.handshake.auth.userId || 'guest-' + socket.id;
+  const userId = socket.handshake.auth.userId;
   const username = socket.handshake.auth.username || 'Guest';
 
-  socket.on('requestGameStart', () => {
-      // User clicked Play Game in Menu
+  if (!userId) {
+      console.log("Socket connected without userId, ignoring.");
+      return;
+  }
+
+  // 1. DUPLICATE CHECK
+  // Check if this userId is already connected on another socket
+  const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
+  
+  if (existingSocketId) {
+      console.log(`[SERVER] Duplicate login for ${username}. Kicking old socket ${existingSocketId}.`);
+      // Notify the old socket (optional)
+      io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
+      // Disconnect the old socket from IO perspective
+      const oldSocket = io.sockets.sockets.get(existingSocketId);
+      if (oldSocket) oldSocket.disconnect(true);
       
+      // We will handle the "disconnect" event of the old socket shortly, 
+      // but we want to pre-emptively seize the player object.
+  }
+
+  // 2. RECONNECTION LOGIC
+  // Check if player object exists (maybe disconnected recently)
+  // We check by userId.
+  let playerObj = null;
+  const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
+
+  if (oldSessionId) {
+      console.log(`[SERVER] ${username} reconnected. Restoring session.`);
+      playerObj = players[oldSessionId];
+      
+      // Remove old key map
+      delete players[oldSessionId];
+      
+      // Update with new Socket ID
+      playerObj.id = socket.id;
+      playerObj.isDisconnected = false;
+      playerObj.disconnectTime = null;
+      
+      // Assign to new key
+      players[socket.id] = playerObj;
+
+      // Send immediate sync
+      socket.emit('currentPlayers', players);
+      socket.broadcast.emit('playerMoved', playerObj); // Notify others they are back
+  }
+
+  socket.on('requestGameStart', () => {
+      // If we just reconnected, we might already have a role/body.
+      if (players[socket.id]) {
+          console.log(`[SERVER] ${username} requested start (Existing Session).`);
+          socket.emit('currentPlayers', players);
+          broadcastGameState();
+          return;
+      }
+
+      // New Player Logic
       let initialRole = Role.HIDER;
       if (gamePhase === GamePhase.IN_PROGRESS) {
           initialRole = Role.SPECTATOR;
@@ -279,7 +366,8 @@ io.on('connection', (socket) => {
         animation: 'Idle',
         color: '#fff',
         role: initialRole,
-        isDead: false
+        isDead: false,
+        isDisconnected: false
       };
 
       console.log(`[SERVER] ${username} joined world (ID: ${userId})`);
@@ -291,7 +379,7 @@ io.on('connection', (socket) => {
 
   socket.on('move', (position, rotation, animation) => {
     const p = players[socket.id];
-    if (p && !p.isDead && p.role !== Role.SPECTATOR) {
+    if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = position;
       p.rotation = rotation;
       p.animation = animation; 
@@ -328,17 +416,19 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     if (players[socket.id]) {
-        console.log(`[SERVER] ${players[socket.id].username} left.`);
-        delete players[socket.id];
-        io.emit('playerDisconnected', socket.id);
-        broadcastGameState();
+        console.log(`[SERVER] ${players[socket.id].username} disconnected (Grace Period Started).`);
+        // DON'T DELETE immediately. Mark as disconnected.
+        players[socket.id].isDisconnected = true;
+        players[socket.id].disconnectTime = Date.now();
+        
+        // Notify others visually? Maybe ghost them later.
+        // For now, we just keep them in the array but they stop updating.
     }
   });
 });
 
 // Serve Static Files (Production)
 const distPath = path.join(__dirname, 'dist');
-// Ensure dist exists or fallback to allow server to run for debugging
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {

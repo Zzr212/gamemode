@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json()); // Enable JSON body parsing for login/register
+app.use(express.json() as any); // Enable JSON body parsing for login/register
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -206,7 +206,8 @@ io.on('connection', (socket) => {
         animation: 'Idle',
         color: '#fff',
         role: initialRole,
-        isDead: false
+        isDead: false,
+        isDisconnected: false
       };
 
       console.log(`[SERVER] ${username} joined world (ID: ${userId})`);
