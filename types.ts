@@ -1,5 +1,3 @@
-import React from 'react';
-
 export interface Vector3 {
   x: number;
   y: number;
@@ -84,42 +82,40 @@ export interface JoystickData {
 }
 
 // React Three Fiber JSX elements augmentation
-interface ThreeElements {
-  // Containers
-  group: any;
-  primitive: any;
-  
-  // Objects
-  mesh: any;
-  instancedMesh: any;
-  
-  // Geometries
-  boxGeometry: any;
-  circleGeometry: any;
-  sphereGeometry: any;
-  ringGeometry: any;
-  planeGeometry: any;
-  
-  // Materials
-  meshBasicMaterial: any;
-  meshStandardMaterial: any;
-  
-  // Lights
-  ambientLight: any;
-  directionalLight: any;
-  pointLight: any;
-  spotLight: any;
-  
-  // Scene & Effects
-  fog: any;
-  color: any;
-
-  // Catch-all
-  [elemName: string]: any;
-}
-
 declare global {
   namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
+    interface IntrinsicElements {
+      // Containers
+      group: any;
+      primitive: any;
+      
+      // Objects
+      mesh: any;
+      instancedMesh: any;
+      
+      // Geometries
+      boxGeometry: any;
+      circleGeometry: any;
+      sphereGeometry: any;
+      ringGeometry: any;
+      planeGeometry: any;
+      
+      // Materials
+      meshBasicMaterial: any;
+      meshStandardMaterial: any;
+      
+      // Lights
+      ambientLight: any;
+      directionalLight: any;
+      pointLight: any;
+      spotLight: any;
+      
+      // Scene & Effects
+      fog: any;
+      color: any;
+
+      // Catch-all
+      [elemName: string]: any;
+    }
   }
 }
