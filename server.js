@@ -14,15 +14,11 @@ app.use(express.json());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: {
-    origin: "*", 
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
 const PORT = process.env.PORT || 3000;
 
-// --- DB LOGIC REMOVED FOR BREVITY (Assumed same as previous) ---
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) { fs.mkdirSync(DATA_DIR); }
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -41,6 +37,7 @@ app.post('/api/register', (req, res) => {
         if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
         if (db.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
         const user = db.createUser(username, email, password);
+        console.log(`[AUTH] New user: ${username}`);
         res.json({ success: true, user });
     } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
@@ -50,6 +47,7 @@ app.post('/api/login', (req, res) => {
         const { username, password } = req.body;
         const user = db.validateLogin(username, password);
         if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+        console.log(`[AUTH] Login: ${username}`);
         res.json({ success: true, user });
     } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
@@ -61,23 +59,17 @@ let players = {};
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
 let lastHunterUserId = null; 
+let isResetting = false;
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
 const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
-// FIX: Y lowered to 3
 const getRandomSpawn = () => ({ x: (Math.random() * 10) - 5, y: 3, z: (Math.random() * 10) - 5 });
 
 const sendSystemMessage = (text) => {
-    io.emit('chatMessage', {
-        id: uuidv4(),
-        sender: 'SYSTEM',
-        text: text,
-        isSystem: true,
-        timestamp: Date.now()
-    });
+    io.emit('chatMessage', { id: uuidv4(), sender: 'SYSTEM', text: text, isSystem: true, timestamp: Date.now() });
 };
 
 setInterval(() => {
@@ -87,6 +79,7 @@ setInterval(() => {
         const p = players[id];
         if (p.isDisconnected && p.disconnectTime) {
             if (now - p.disconnectTime > AFK_TIMEOUT) {
+                console.log(`[SERVER] AFK Removal: ${p.username}`);
                 delete players[id];
                 io.emit('playerDisconnected', id);
                 sendSystemMessage(`${p.username} removed (AFK)`);
@@ -102,7 +95,8 @@ setInterval(() => {
   const activeCount = activePlayers.length;
 
   if (gamePhase === GamePhase.WAITING) {
-    if (activeCount >= 2) {
+    if (activeCount >= 2 && !isResetting) {
+      console.log(`[SERVER] Countdown Started.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
@@ -111,6 +105,7 @@ setInterval(() => {
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     if (activeCount < 2) {
+        console.log(`[SERVER] Countdown Aborted.`);
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
         broadcastGameState();
@@ -121,7 +116,7 @@ setInterval(() => {
         broadcastGameState();
     }
   }
-  else if (gamePhase === GamePhase.IN_PROGRESS) {
+  else if (gamePhase === GamePhase.IN_PROGRESS && !isResetting) {
     gameTimer--;
     const allIds = Object.keys(players);
     const hunters = allIds.filter(id => players[id].role === Role.HUNTER && !players[id].isDead);
@@ -144,8 +139,10 @@ function broadcastGameState() {
 }
 
 function startGame() {
+    console.log(`[SERVER] Game Start.`);
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
+    isResetting = false;
     sendSystemMessage("Game Started!");
 
     const ids = Object.keys(players);
@@ -166,6 +163,7 @@ function startGame() {
         const rid = candidates[Math.floor(Math.random() * candidates.length)];
         players[rid].role = Role.HUNTER;
         lastHunterUserId = players[rid].userId;
+        console.log(`[SERVER] Hunter: ${players[rid].username}`);
     }
 
     io.emit('currentPlayers', players);
@@ -173,25 +171,32 @@ function startGame() {
 }
 
 function endGame(reason) {
+    if (isResetting) return;
+    isResetting = true;
+    console.log(`[SERVER] End Game: ${reason}`);
     io.emit('gameMessage', reason);
     sendSystemMessage(`Round Over: ${reason}`);
     
-    if (Object.keys(players).length >= 2) {
-        gamePhase = GamePhase.COUNTDOWN;
-        gameTimer = COUNTDOWN_TIME;
-    } else {
-        gamePhase = GamePhase.WAITING;
-        gameTimer = 0;
-    }
+    setTimeout(() => {
+        if (Object.keys(players).length >= 2) {
+            gamePhase = GamePhase.COUNTDOWN;
+            gameTimer = COUNTDOWN_TIME;
+        } else {
+            gamePhase = GamePhase.WAITING;
+            gameTimer = 0;
+        }
 
-    Object.keys(players).forEach(id => {
-        players[id].isDead = false;
-        players[id].role = Role.HIDER;
-        players[id].position = getRandomSpawn();
-    });
+        Object.keys(players).forEach(id => {
+            players[id].isDead = false;
+            players[id].role = Role.HIDER;
+            players[id].position = getRandomSpawn();
+        });
 
-    io.emit('currentPlayers', players);
-    broadcastGameState();
+        isResetting = false;
+        io.emit('currentPlayers', players);
+        broadcastGameState();
+        console.log("[SERVER] Reset complete.");
+    }, 3000);
 }
 
 io.on('connection', (socket) => {
@@ -206,6 +211,7 @@ io.on('connection', (socket) => {
       io.to(existing).emit('forceDisconnect', 'New login detected');
       const old = io.sockets.sockets.get(existing);
       if (old) old.disconnect(true);
+      delete players[existing];
   }
 
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
@@ -219,6 +225,7 @@ io.on('connection', (socket) => {
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', p);
       sendSystemMessage(`${username} reconnected.`);
+      console.log(`[SERVER] Reconnect: ${username}`);
   }
 
   socket.on('requestGameStart', () => {
@@ -238,6 +245,7 @@ io.on('connection', (socket) => {
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
       sendSystemMessage(`${username} joined.`);
+      console.log(`[SERVER] Join: ${username}`);
       broadcastGameState();
   });
 
@@ -264,6 +272,7 @@ io.on('connection', (socket) => {
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
               sendSystemMessage(`${hunter.username} killed ${hider.username}`);
+              console.log(`[SERVER] Kill: ${hunter.username} -> ${hider.username}`);
               broadcastGameState(); 
               break; 
           }
@@ -272,11 +281,25 @@ io.on('connection', (socket) => {
 
   socket.on('chatMessage', (text) => {
       if(!text) return;
-      io.emit('chatMessage', { id: uuidv4(), sender: players[socket.id]?.username || '?', text: text.substring(0,50), isSystem: false, timestamp: Date.now() });
+      const safe = text.substring(0,50);
+      console.log(`[CHAT] ${players[socket.id]?.username}: ${safe}`);
+      io.emit('chatMessage', { id: uuidv4(), sender: players[socket.id]?.username || '?', text: safe, isSystem: false, timestamp: Date.now() });
+  });
+
+  socket.on('leaveGame', () => {
+      if (players[socket.id]) {
+          console.log(`[SERVER] Explicit Leave: ${players[socket.id].username}`);
+          const name = players[socket.id].username;
+          delete players[socket.id];
+          io.emit('playerDisconnected', socket.id);
+          sendSystemMessage(`${name} left.`);
+          broadcastGameState();
+      }
   });
 
   socket.on('disconnect', () => {
     if (players[socket.id]) {
+        console.log(`[SERVER] Disconnect (Grace): ${players[socket.id].username}`);
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
     }

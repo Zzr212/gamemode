@@ -73,7 +73,8 @@ export interface ClientToServerEvents {
   pingSync: (callback: () => void) => void;
   requestGameStart: () => void; 
   attemptKill: () => void; 
-  chatMessage: (text: string) => void; // Send chat
+  chatMessage: (text: string) => void; 
+  leaveGame: () => void; // Explicit leave event
 }
 
 export interface JoystickData {

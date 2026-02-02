@@ -33,6 +33,7 @@ app.post('/api/register', (req, res) => {
         return res.status(400).json({ error: 'Username already taken' });
     }
     const user = db.createUser(username, email, password);
+    console.log(`[AUTH] New user registered: ${username}`);
     res.json({ success: true, user });
 });
 
@@ -42,6 +43,7 @@ app.post('/api/login', (req, res) => {
     if (!user) {
         return res.status(401).json({ error: 'Invalid credentials' });
     }
+    console.log(`[AUTH] User logged in: ${username}`);
     res.json({ success: true, user });
 });
 
@@ -50,6 +52,7 @@ let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
+let isResetting = false; // Prevent multiple end game triggers
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
@@ -57,7 +60,6 @@ const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
 // Utility: Random Spawn
-// FIX: Lowered Y to 3 (was 10) to prevent falling through map before physics loads
 const getRandomSpawn = () => {
     return {
         x: (Math.random() * 10) - 5, 
@@ -66,7 +68,6 @@ const getRandomSpawn = () => {
     };
 };
 
-// --- CHAT HELPER ---
 const sendSystemMessage = (text: string) => {
     io.emit('chatMessage', {
         id: uuidv4(),
@@ -115,7 +116,7 @@ setInterval(() => {
   const activeCount = activePlayers.length;
 
   if (gamePhase === GamePhase.WAITING) {
-    if (activeCount >= 2) {
+    if (activeCount >= 2 && !isResetting) {
       console.log(`[SERVER] ${activeCount} players ready. Starting Countdown.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
@@ -137,7 +138,7 @@ setInterval(() => {
         broadcastGameState();
     }
   }
-  else if (gamePhase === GamePhase.IN_PROGRESS) {
+  else if (gamePhase === GamePhase.IN_PROGRESS && !isResetting) {
     gameTimer--;
 
     const allPlayerIds = Object.keys(players);
@@ -180,6 +181,7 @@ function startGame() {
     console.log("[SERVER] Game Started!");
     gamePhase = GamePhase.IN_PROGRESS;
     gameTimer = ROUND_TIME;
+    isResetting = false;
     sendSystemMessage("Game Started! Hunter chosen.");
 
     const playerIds = Object.keys(players);
@@ -213,27 +215,38 @@ function startGame() {
 }
 
 function endGame(reason: string) {
+    if (isResetting) return; // Prevent double firing
+    isResetting = true;
+
     console.log(`[SERVER] Game End: ${reason}`);
-    io.emit('gameMessage', reason); // Keeping for big splash text
-    sendSystemMessage(`Round Over: ${reason}`);
     
-    if (Object.keys(players).length >= 2) {
-        gamePhase = GamePhase.COUNTDOWN;
-        gameTimer = COUNTDOWN_TIME;
-    } else {
-        gamePhase = GamePhase.WAITING;
-        gameTimer = 0;
-    }
+    // 1. Notify Clients Immediately
+    io.emit('gameMessage', reason);
+    sendSystemMessage(`Round Over: ${reason}`);
 
-    // Reset logic
-    Object.keys(players).forEach(id => {
-        players[id].isDead = false;
-        players[id].role = Role.HIDER;
-        players[id].position = getRandomSpawn();
-    });
+    // 2. DELAY RESETS (Bug Fix for Hunter Glitch)
+    // Wait 3 seconds so the client can process the win state before we jerk the camera back to spawn
+    setTimeout(() => {
+        if (Object.keys(players).length >= 2) {
+            gamePhase = GamePhase.COUNTDOWN;
+            gameTimer = COUNTDOWN_TIME;
+        } else {
+            gamePhase = GamePhase.WAITING;
+            gameTimer = 0;
+        }
 
-    io.emit('currentPlayers', players);
-    broadcastGameState();
+        // Reset positions
+        Object.keys(players).forEach(id => {
+            players[id].isDead = false;
+            players[id].role = Role.HIDER;
+            players[id].position = getRandomSpawn();
+        });
+
+        isResetting = false;
+        io.emit('currentPlayers', players);
+        broadcastGameState();
+        console.log("[SERVER] Positions reset. Returning to Lobby/Countdown.");
+    }, 3000);
 }
 
 io.on('connection', (socket) => {
@@ -242,10 +255,11 @@ io.on('connection', (socket) => {
   const username = socket.handshake.auth.username || 'Guest';
 
   if (!userId) {
-      console.log("Socket connected without userId, ignoring.");
+      console.log("[SERVER] Socket connected without userId, ignoring.");
       return;
   }
 
+  // Check for duplicate active connection
   const existingSocketId = Object.keys(players).find(id => players[id].userId === userId && !players[id].isDisconnected);
   
   if (existingSocketId) {
@@ -253,8 +267,11 @@ io.on('connection', (socket) => {
       io.to(existingSocketId).emit('forceDisconnect', 'New login detected');
       const oldSocket = io.sockets.sockets.get(existingSocketId);
       if (oldSocket) oldSocket.disconnect(true);
+      // Clean up the old entry immediately
+      delete players[existingSocketId];
   }
 
+  // Check for disconnected session to restore
   let playerObj = null;
   const oldSessionId = Object.keys(players).find(id => players[id].userId === userId);
 
@@ -262,8 +279,7 @@ io.on('connection', (socket) => {
       console.log(`[SERVER] ${username} reconnected. Restoring session.`);
       playerObj = players[oldSessionId];
       
-      io.emit('playerDisconnected', oldSessionId);
-      delete players[oldSessionId];
+      delete players[oldSessionId]; // Remove old key
       
       playerObj.id = socket.id;
       playerObj.isDisconnected = false;
@@ -317,6 +333,7 @@ io.on('connection', (socket) => {
       p.position = position;
       p.rotation = rotation;
       p.animation = animation; 
+      // Broadcast movement
       socket.broadcast.emit('playerMoved', p);
     }
   });
@@ -347,8 +364,8 @@ io.on('connection', (socket) => {
 
   socket.on('chatMessage', (text: string) => {
       if (!text || !text.trim()) return;
-      // Basic escaping
-      const safeText = text.substring(0, 50); // limit length
+      const safeText = text.substring(0, 50);
+      console.log(`[CHAT] ${players[socket.id]?.username}: ${safeText}`);
       io.emit('chatMessage', {
           id: uuidv4(),
           sender: players[socket.id]?.username || 'Unknown',
@@ -358,9 +375,22 @@ io.on('connection', (socket) => {
       });
   });
 
+  // EXPLICIT LEAVE - Immediate removal
+  socket.on('leaveGame', () => {
+      if (players[socket.id]) {
+          console.log(`[SERVER] ${players[socket.id].username} explicitly left game.`);
+          const name = players[socket.id].username;
+          delete players[socket.id];
+          io.emit('playerDisconnected', socket.id);
+          sendSystemMessage(`${name} left the game.`);
+          broadcastGameState();
+      }
+  });
+
   socket.on('disconnect', () => {
+    // If player exists (wasn't removed by leaveGame), treat as accidental disconnect
     if (players[socket.id]) {
-        console.log(`[SERVER] ${players[socket.id].username} left.`);
+        console.log(`[SERVER] ${players[socket.id].username} disconnected (Grace period started).`);
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
     }

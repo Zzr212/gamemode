@@ -1,4 +1,4 @@
-import React, { useRef, Suspense, Component, ReactNode, useState, useEffect, useCallback } from 'react';
+import React, { useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
@@ -8,8 +8,15 @@ import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
 
 // Error Boundary
-class ModelErrorBoundary extends Component<{ children?: ReactNode }, { hasError: boolean }> {
-  public state = { hasError: false };
+interface ErrorBoundaryProps {
+  children?: ReactNode;
+}
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public state: ErrorBoundaryState = { hasError: false };
   
   static getDerivedStateFromError() { return { hasError: true }; }
   
@@ -44,14 +51,22 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
       const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
       const distance = groupRef.current.position.distanceTo(targetPos);
       
-      const lerpFactor = distance > 5 ? 1 : 15 * delta; 
-      groupRef.current.position.lerp(targetPos, lerpFactor);
+      // If distance is large (respawn/teleport), snap immediately
+      if (distance > 3) {
+          groupRef.current.position.copy(targetPos);
+      } else {
+          // Smooth interpolation
+          // Lerp factor of 10-15 is standard for network smoothing
+          groupRef.current.position.lerp(targetPos, 12 * delta);
+      }
 
       let currentRot = groupRef.current.rotation.y;
       let targetRot = data.rotation;
       let diff = targetRot - currentRot;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
+      
+      // Smooth rotation
       groupRef.current.rotation.y += diff * 15 * delta;
     }
   });
@@ -83,9 +98,14 @@ const CameraController: React.FC<{
   const currentPos = useRef(new THREE.Vector3(0, 10, 10));
   const raycaster = useRef(new THREE.Raycaster());
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const playerPos = targetPos.current;
     
+    // Check if player position jumped drastically (reset), if so, snap camera
+    if (currentPos.current.distanceTo(playerPos) > 10) {
+        currentPos.current.copy(playerPos).add(new THREE.Vector3(0, 5, 5));
+    }
+
     const maxDistance = 7;
     const minDistance = 2; 
     const playerHeight = 1.5; 
@@ -121,7 +141,8 @@ const CameraController: React.FC<{
 
     const safePos = origin.clone().add(direction.multiplyScalar(finalDistance));
 
-    currentPos.current.lerp(safePos, 0.3);
+    // Smooth camera follow
+    currentPos.current.lerp(safePos, 10 * delta); // Increased from 0.3 for faster response
     camera.position.copy(currentPos.current);
 
     const rightDir = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -176,14 +197,14 @@ const PlayerController: React.FC<{
 
   // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
   useEffect(() => {
-    // Force reset velocity when phase changes (e.g. End Game reset)
+    // Force reset velocity when phase changes
     velocity.current.set(0, 0, 0);
     
     const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
     if (dist > 5.0) {
-        console.log("Teleporting player (Respawn/Reset detected)");
+        // Hard Snap
         pos.current.set(initialPos.x, initialPos.y, initialPos.z);
-        velocity.current.set(0, 0, 0); // KILL MOMENTUM
+        velocity.current.set(0, 0, 0);
         lastSendTime.current = 0; 
     }
   }, [initialPos.x, initialPos.y, initialPos.z, gamePhase]);
@@ -218,7 +239,7 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Wall Collision (ENHANCED: Multi-Ray & Back-origin)
+    // 2. Wall Collision
     let isBlocked = false;
     if (isMoving && mapObject && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
         const moveVector = new THREE.Vector3(moveX, 0, moveZ);
@@ -321,9 +342,10 @@ const PlayerController: React.FC<{
         setVisualAnimation(newAnim);
     }
 
-    // Network Sync
+    // Network Sync (Faster rate)
     const now = Date.now();
-    const shouldSend = (now - lastSendTime.current > 50) || animChanged; 
+    // Reduced from 50ms to 25ms (~40 ticks/sec) for smoother movement
+    const shouldSend = (now - lastSendTime.current > 25) || animChanged; 
     
     if (shouldSend) {
         onMove(pos.current, rotation.current, animationRef.current);

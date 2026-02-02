@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
@@ -30,7 +30,6 @@ function App() {
   const [lastMessageTime, setLastMessageTime] = useState(0);
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
-  // Auto-fade logic: if now - lastMessageTime > 2000ms AND chat is closed, fade out.
   const [chatOpacity, setChatOpacity] = useState(1);
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
@@ -41,7 +40,7 @@ function App() {
   const isSpectator = !myPlayer || myPlayer.role === Role.SPECTATOR || myPlayer.isDead;
   const isHunter = myPlayer?.role === Role.HUNTER && !myPlayer.isDead;
 
-  const activePlayers = Object.values(players).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
+  const activePlayers = (Object.values(players) as PlayerState[]).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
 
   // --- FULLSCREEN HELPER ---
   const triggerFullScreen = () => {
@@ -62,7 +61,6 @@ function App() {
     }
   };
 
-  // --- AUTH HANDLER ---
   const handleLoginSuccess = (user: UserProfile) => {
       setCurrentUser(user);
       setAppState('MENU');
@@ -72,7 +70,6 @@ function App() {
   useEffect(() => {
       const interval = setInterval(() => {
           const timeSinceLast = Date.now() - lastMessageTime;
-          // Fade out after 2 seconds if chat is CLOSED
           if (!isChatOpen && timeSinceLast > 2000) {
               setChatOpacity(0);
           } else {
@@ -111,7 +108,6 @@ function App() {
     };
 
     const onGameMessage = (msg: string) => {
-        // Replaced notification logic with System Chat Messages (handled by server now too, but for local alerts)
         if (msg.includes("WIN")) {
             setRoleMessage(msg);
             setTimeout(() => setRoleMessage(null), 4000);
@@ -126,9 +122,8 @@ function App() {
     };
 
     const onChatMessage = (msg: ChatMessage) => {
-        setChatMessages(prev => [...prev.slice(-19), msg]); // Keep last 20
+        setChatMessages(prev => [...prev.slice(-19), msg]); 
         setLastMessageTime(Date.now());
-        // Auto-scroll
         if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     };
 
@@ -191,6 +186,7 @@ function App() {
   };
 
   const handleLeaveGame = () => {
+      socket.emit('leaveGame'); // Tell server we are leaving intentionally
       disconnectSocket();
       setAppState('MENU');
       setPlayers({});
@@ -216,8 +212,8 @@ function App() {
   };
   const getSpectatingId = () => {
       if (activePlayers.length === 0) return null;
-      if (spectatingIndex >= activePlayers.length) return activePlayers[0].id;
-      return activePlayers[spectatingIndex].id;
+      if (spectatingIndex >= activePlayers.length) return activePlayers[0]?.id;
+      return activePlayers[spectatingIndex]?.id;
   };
 
   const formatTime = (s: number) => {
@@ -226,17 +222,14 @@ function App() {
       return `${min}:${sec.toString().padStart(2, '0')}`;
   };
 
-  // --- RENDER ---
   if (appState === 'AUTH') return <AuthScreen onLogin={handleLoginSuccess} />;
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden select-none touch-none">
-      
       {appState === 'MENU' && <MainMenu onPlay={handlePlayGame} />}
 
       {appState === 'GAME' && (
         <>
-            {/* 3D Scene */}
             <div className="absolute inset-0 z-0">
                 <GameScene 
                     joystickData={joystickRef} 
@@ -249,7 +242,6 @@ function App() {
                 />
             </div>
 
-            {/* Splash Messages */}
             {roleMessage && (
                 <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
                     <h1 className="text-5xl font-black text-white tracking-tighter drop-shadow-[0_4px_4px_rgba(0,0,0,1)] animate-bounce text-center px-4 bg-black/40 backdrop-blur-sm rounded-xl py-2">
@@ -258,12 +250,10 @@ function App() {
                 </div>
             )}
 
-            {/* Crosshair */}
             {!isSpectator && (
                 <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-white/90 rounded-full -translate-x-1/2 -translate-y-1/2 shadow-[0_0_2px_rgba(0,0,0,1)] z-10 pointer-events-none" />
             )}
 
-            {/* UI LAYER */}
             <div 
                 className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between"
                 style={{
@@ -273,12 +263,10 @@ function App() {
                     paddingLeft: 'env(safe-area-inset-left, 20px)'
                 }}
             >
-                {/* TOP BAR: CHAT (Left) --- STATS (Center) --- LEAVE (Right) */}
+                {/* TOP BAR */}
                 <div className="w-full flex justify-between items-start pt-2 px-2 md:px-4">
-                    
-                    {/* 1. CHAT SECTION (Top Left) */}
+                    {/* CHAT */}
                     <div className="pointer-events-auto flex flex-col items-start w-1/3 z-50">
-                        {/* Open Chat / Icon Button - Hides when chat is visibly open */}
                         {!isChatOpen && (
                             <button 
                                 onClick={() => { setIsChatOpen(true); setLastMessageTime(Date.now()); }}
@@ -288,21 +276,15 @@ function App() {
                             </button>
                         )}
 
-                        {/* Fading Preview (When closed) OR Full Chat (When open) */}
                         <div className={`mt-2 flex flex-col items-start transition-all duration-300 ${isChatOpen ? 'w-64 h-48' : 'w-48'}`}>
-                            
                             {isChatOpen ? (
-                                // OPEN CHAT MODE
                                 <div className="flex flex-col w-full h-full bg-black/60 backdrop-blur-md rounded-lg border border-white/10 overflow-hidden">
-                                    {/* Header / Close */}
                                     <div className="flex justify-between items-center p-2 bg-black/40">
                                         <span className="text-[10px] text-gray-400 font-bold tracking-wider">GAME CHAT</span>
                                         <button onClick={() => setIsChatOpen(false)} className="text-gray-400 hover:text-white">
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                                         </button>
                                     </div>
-                                    
-                                    {/* Messages Area */}
                                     <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-hide">
                                         {chatMessages.map((msg, i) => (
                                             <div key={i} className={`text-xs break-words ${msg.isSystem ? 'text-yellow-400 italic' : 'text-white'}`}>
@@ -312,8 +294,6 @@ function App() {
                                         ))}
                                         <div ref={chatEndRef} />
                                     </div>
-
-                                    {/* Input Area */}
                                     <form onSubmit={sendChat} className="p-2 bg-black/40 flex gap-2">
                                         <input 
                                             type="text" 
@@ -328,7 +308,6 @@ function App() {
                                     </form>
                                 </div>
                             ) : (
-                                // FADING PREVIEW MODE
                                 <div 
                                     className={`flex flex-col gap-1 transition-opacity duration-500 pointer-events-auto cursor-pointer`} 
                                     style={{ opacity: chatOpacity }}
@@ -344,7 +323,7 @@ function App() {
                         </div>
                     </div>
 
-                    {/* 2. STATS CENTER */}
+                    {/* STATS */}
                     <div className="flex items-center gap-2 md:gap-4 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 shadow-lg pointer-events-auto">
                          <div className="flex flex-col items-center justify-center min-w-[50px]">
                             <span className="text-[9px] text-gray-400 font-bold uppercase">TIMER</span>
@@ -367,7 +346,7 @@ function App() {
                         </div>
                     </div>
 
-                    {/* 3. LEAVE BUTTON (Right) */}
+                    {/* LEAVE */}
                     <div className="w-1/3 flex justify-end pointer-events-auto">
                         <button 
                             onClick={handleLeaveGame}
@@ -381,24 +360,18 @@ function App() {
 
                 </div>
 
-                {/* BOTTOM CONTROLS LAYER */}
+                {/* BOTTOM CONTROLS */}
                 <div className="flex-1 w-full relative pointer-events-none">
-                     
-                     {/* Touch Look Area */}
                      {!isSpectator && (
                         <div className="absolute inset-0 pointer-events-auto z-20">
                             <TouchLook onRotate={handleCameraRotate} />
                         </div>
                      )}
-
-                     {/* Joystick */}
                      {!isSpectator && (
                         <div className="absolute bottom-4 left-4 z-40 pointer-events-auto opacity-70 hover:opacity-100 transition-opacity">
                             <Joystick onMove={handleJoystickMove} />
                         </div>
                      )}
-
-                     {/* Action Buttons */}
                      {!isSpectator && (
                         <div className="absolute bottom-4 right-4 z-40 pointer-events-auto flex flex-col items-end gap-4">
                             {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
@@ -409,7 +382,6 @@ function App() {
                                      <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                                 </button>
                             )}
-
                             <button
                                 onPointerDown={handleJump}
                                 className="w-20 h-20 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center backdrop-blur-sm transition-all"
@@ -418,8 +390,6 @@ function App() {
                             </button>
                         </div>
                      )}
-
-                     {/* Spectator Controls */}
                      {isSpectator && (
                         <div className="absolute bottom-4 left-0 right-0 z-40 flex justify-center items-center gap-4 pointer-events-auto">
                             <button onClick={() => cycleSpectator(-1)} className="bg-white/10 hover:bg-white/20 p-3 rounded-full backdrop-blur border border-white/20 text-white">←</button>
@@ -434,7 +404,6 @@ function App() {
         </>
       )}
 
-      {/* Orientation Warning */}
       <div className="hidden portrait:flex absolute inset-0 bg-black z-[100] items-center justify-center text-white text-center p-8">
         <p className="text-xl font-bold tracking-wider">PLEASE ROTATE DEVICE</p>
       </div>
