@@ -259,7 +259,7 @@ io.on('connection', (socket) => {
       // Update with new Socket ID
       playerObj.id = socket.id;
       playerObj.isDisconnected = false;
-      playerObj.disconnectTime = null;
+      playerObj.disconnectTime = undefined; // Fixed type error here
       
       // Assign to new key
       players[socket.id] = playerObj;
