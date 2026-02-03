@@ -1,6 +1,6 @@
 import React, { Component, useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
+import { PerspectiveCamera, Sky, Loader, PerformanceMonitor, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { JoystickData, PlayerState, Vector3, Role, GamePhase } from '../types';
 import { PlayerModel } from './PlayerModel';
@@ -33,16 +33,14 @@ interface GameSceneProps {
   players: Record<string, PlayerState>;
   myId: string | null;
   spectatingId: string | null;
-  gamePhase: GamePhase; // Passed down to detect resets
+  gamePhase: GamePhase;
+  showCoords: boolean; // Admin toggle
 }
 
 // --- REMOTE PLAYER COMPONENT ---
 const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   const groupRef = useRef<THREE.Group>(null);
   
-  // CRITICAL FIX: Do NOT return early here before hooks are called.
-  // This was causing the "White Screen" / "Rendered fewer hooks" crash on death.
-
   useEffect(() => {
     if (groupRef.current) {
         groupRef.current.position.set(data.position.x, data.position.y, data.position.z);
@@ -50,18 +48,14 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   }, []); 
 
   useFrame((_, delta) => {
-    // Logic check inside the hook instead of preventing the hook
     if (data.role === Role.SPECTATOR || data.isDead || !groupRef.current) return;
 
     const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
     const distance = groupRef.current.position.distanceTo(targetPos);
       
-    // If distance is large (respawn/teleport), snap immediately
     if (distance > 3) {
         groupRef.current.position.copy(targetPos);
     } else {
-        // Smooth interpolation
-        // Lerp factor of 10-15 is standard for network smoothing
         groupRef.current.position.lerp(targetPos, 12 * delta);
     }
 
@@ -71,11 +65,9 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
       
-    // Smooth rotation
     groupRef.current.rotation.y += diff * 15 * delta;
   });
 
-  // Safe to return null here AFTER hooks have run
   if (data.role === Role.SPECTATOR || data.isDead) return null;
 
   return (
@@ -108,7 +100,6 @@ const CameraController: React.FC<{
   useFrame((_, delta) => {
     const playerPos = targetPos.current;
     
-    // Check if player position jumped drastically (reset), if so, snap camera
     if (currentPos.current.distanceTo(playerPos) > 10) {
         currentPos.current.copy(playerPos).add(new THREE.Vector3(0, 5, 5));
     }
@@ -148,8 +139,7 @@ const CameraController: React.FC<{
 
     const safePos = origin.clone().add(direction.multiplyScalar(finalDistance));
 
-    // Smooth camera follow
-    currentPos.current.lerp(safePos, 10 * delta); // Increased from 0.3 for faster response
+    currentPos.current.lerp(safePos, 10 * delta); 
     camera.position.copy(currentPos.current);
 
     const rightDir = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -176,8 +166,9 @@ const PlayerController: React.FC<{
   onMove: (pos: Vector3, rot: number, anim: string) => void;
   initialPos: Vector3;
   targetPosRef: React.MutableRefObject<THREE.Vector3>;
-  gamePhase: GamePhase; // Needed for reset detection
-}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef, gamePhase }) => {
+  gamePhase: GamePhase; 
+  showCoords: boolean;
+}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef, gamePhase, showCoords }) => {
   const { scene } = useThree();
   
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
@@ -188,6 +179,8 @@ const PlayerController: React.FC<{
   
   const animationRef = useRef('Idle');
   const [visualAnimation, setVisualAnimation] = useState('Idle');
+  // For coords display
+  const [coordText, setCoordText] = useState("");
   
   const downRaycaster = useRef(new THREE.Raycaster());
   const wallRaycaster = useRef(new THREE.Raycaster());
@@ -202,14 +195,10 @@ const PlayerController: React.FC<{
   const CHECK_RADIUS = 0.3; 
   const MAX_STEP_HEIGHT = 0.6;
 
-  // --- BUG FIX: DETECT RESPAWNS / TELEPORTS ---
   useEffect(() => {
-    // Force reset velocity when phase changes
     velocity.current.set(0, 0, 0);
-    
     const dist = pos.current.distanceTo(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
     if (dist > 5.0) {
-        // Hard Snap
         pos.current.set(initialPos.x, initialPos.y, initialPos.z);
         velocity.current.set(0, 0, 0);
         lastSendTime.current = 0; 
@@ -222,7 +211,6 @@ const PlayerController: React.FC<{
     const { x, y } = joystickData.current;
     const mapObject = scene.getObjectByName(COLLIDER_NAME);
 
-    // 1. Calculate Intent
     const isMoving = Math.abs(x) > 0.1 || Math.abs(y) > 0.1;
     let moveX = 0;
     let moveZ = 0;
@@ -246,7 +234,6 @@ const PlayerController: React.FC<{
       }
     }
 
-    // 2. Wall Collision
     let isBlocked = false;
     if (isMoving && mapObject && (Math.abs(moveX) > 0.001 || Math.abs(moveZ) > 0.001)) {
         const moveVector = new THREE.Vector3(moveX, 0, moveZ);
@@ -271,7 +258,6 @@ const PlayerController: React.FC<{
         pos.current.z += moveZ;
     }
 
-    // 3. Ground Detection
     let groundY = -100;
     if (mapObject) {
         const origins = [
@@ -303,7 +289,6 @@ const PlayerController: React.FC<{
         if (foundValidGround) groundY = maxHitY;
     }
 
-    // Jump
     if (jumpPressed.current && isGrounded.current) {
         velocity.current.y = JUMP_VELOCITY;
         isGrounded.current = false;
@@ -312,7 +297,6 @@ const PlayerController: React.FC<{
         jumpPressed.current = false;
     }
 
-    // Gravity
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= GRAVITY * dt;
         pos.current.y += velocity.current.y * dt;
@@ -323,22 +307,18 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
 
-    // Respawn Floor (Void check)
     if (pos.current.y < -20) {
-        pos.current.y = 3; // Reset to safe height
+        pos.current.y = 3; 
         pos.current.x = (Math.random() * 10) - 5; 
         pos.current.z = (Math.random() * 10) - 5;
         velocity.current.set(0,0,0);
     }
 
-    // Visual Updates
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
     if (modelRotationGroupRef.current) modelRotationGroupRef.current.rotation.y = rotation.current;
 
-    // Sync camera target ref
     targetPosRef.current.copy(pos.current);
 
-    // Animation
     let newAnim = 'Idle';
     if (!isGrounded.current) newAnim = 'Jump'; 
     else if (isMoving && !isBlocked) newAnim = 'Run';
@@ -348,10 +328,13 @@ const PlayerController: React.FC<{
         animationRef.current = newAnim;
         setVisualAnimation(newAnim);
     }
+    
+    // Update Coords text only if showing to save perf
+    if (showCoords) {
+        setCoordText(`X: ${pos.current.x.toFixed(1)}, Y: ${pos.current.y.toFixed(1)}, Z: ${pos.current.z.toFixed(1)}`);
+    }
 
-    // Network Sync (Faster rate)
     const now = Date.now();
-    // Reduced from 50ms to 25ms (~40 ticks/sec) for smoother movement
     const shouldSend = (now - lastSendTime.current > 25) || animChanged; 
     
     if (shouldSend) {
@@ -365,6 +348,13 @@ const PlayerController: React.FC<{
         <group ref={modelRotationGroupRef}>
             <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
         </group>
+        {showCoords && (
+             <Html position={[0, 2.2, 0]} center>
+                <div className="bg-black/70 text-green-400 text-xs px-2 py-1 rounded font-mono whitespace-nowrap border border-green-500/30">
+                    {coordText}
+                </div>
+            </Html>
+        )}
     </group>
   );
 };
@@ -379,14 +369,13 @@ const SpectatorController: React.FC<{
         if (!targetId || !players[targetId]) return;
         const p = players[targetId];
         const target = new THREE.Vector3(p.position.x, p.position.y, p.position.z);
-        // Smoothly move camera target point
         targetPosRef.current.lerp(target, 10 * delta);
     });
     return null;
 }
 
 // --- MAIN GAME SCENE ---
-export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId, gamePhase }) => {
+export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId, gamePhase, showCoords }) => {
   const [dpr, setDpr] = useState(1.5); 
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
 
@@ -418,15 +407,12 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
           <ModelErrorBoundary>
             <MapModel />
 
-            {/* Remote Players */}
             {Object.values(players).map((p: PlayerState) => {
               if (p.id === myId) return null;
               return <RemotePlayer key={p.id} data={p} />;
             })}
 
-            {/* Logic Router */}
             {!isSpectating ? (
-                // Alive and playing
                 <PlayerController 
                     joystickData={joystickData} 
                     cameraRotation={cameraRotation} 
@@ -435,9 +421,9 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
                     initialPos={players[myId].position}
                     targetPosRef={cameraTargetRef}
                     gamePhase={gamePhase}
+                    showCoords={showCoords}
                 />
             ) : (
-                // Spectating or Dead
                 <SpectatorController 
                     targetId={spectatingId} 
                     players={players} 
@@ -445,7 +431,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
                 />
             )}
 
-            {/* Camera handles looking at the targetRef */}
             <CameraController targetPos={cameraTargetRef} cameraRotation={cameraRotation} />
             
           </ModelErrorBoundary>

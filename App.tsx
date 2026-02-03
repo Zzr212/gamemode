@@ -32,6 +32,10 @@ function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [chatOpacity, setChatOpacity] = useState(1);
 
+  // ADMIN STATE
+  const [showCoords, setShowCoords] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
   const jumpRef = useRef<boolean>(false);
@@ -42,7 +46,6 @@ function App() {
 
   const activePlayers = (Object.values(players) as PlayerState[]).filter((p: PlayerState) => p.role !== Role.SPECTATOR && !p.isDead && !p.isDisconnected);
 
-  // --- FULLSCREEN HELPER ---
   const triggerFullScreen = () => {
     try {
         const docEl = document.documentElement as any;
@@ -84,8 +87,9 @@ function App() {
     const onConnect = () => setMyId(socket.id || null);
     
     const onForceDisconnect = (reason: string) => {
+        disconnectSocket();
         alert(reason);
-        window.location.reload();
+        window.location.reload(); // Refresh to clear state/auth
     };
 
     const onCurrentPlayers = (serverPlayers: Record<string, PlayerState>) => setPlayers(serverPlayers);
@@ -110,7 +114,7 @@ function App() {
     const onGameMessage = (msg: string) => {
         if (msg.includes("WIN") || msg.includes("Time")) {
             setRoleMessage(msg);
-            setTimeout(() => setRoleMessage(null), 4000); // Show for duration of Game Over buffer
+            setTimeout(() => setRoleMessage(null), 4000); 
         }
     };
 
@@ -127,6 +131,14 @@ function App() {
         if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     };
 
+    const onToggleLocationDisplay = (show: boolean) => {
+        setShowCoords(prev => !prev); // Toggle
+    };
+
+    const onToggleAdminPanel = (show: boolean) => {
+        setShowAdminPanel(true);
+    };
+
     socket.on('connect', onConnect);
     socket.on('forceDisconnect', onForceDisconnect);
     socket.on('currentPlayers', onCurrentPlayers);
@@ -137,6 +149,8 @@ function App() {
     socket.on('gameMessage', onGameMessage);
     socket.on('playerKilled', onPlayerKilled);
     socket.on('chatMessage', onChatMessage);
+    socket.on('toggleLocationDisplay', onToggleLocationDisplay);
+    socket.on('toggleAdminPanel', onToggleAdminPanel);
 
     return () => {
         socket.off('connect', onConnect);
@@ -149,6 +163,8 @@ function App() {
         socket.off('gameMessage', onGameMessage);
         socket.off('playerKilled', onPlayerKilled);
         socket.off('chatMessage', onChatMessage);
+        socket.off('toggleLocationDisplay', onToggleLocationDisplay);
+        socket.off('toggleAdminPanel', onToggleAdminPanel);
     };
   }, [appState, myId, players]); 
 
@@ -186,11 +202,14 @@ function App() {
   };
 
   const handleLeaveGame = () => {
-      socket.emit('leaveGame'); // Tell server we are leaving intentionally
+      socket.emit('leaveGame'); // Explicit leave
       disconnectSocket();
       setAppState('MENU');
       setPlayers({});
       setChatMessages([]);
+      setGamePhase(GamePhase.WAITING);
+      setShowCoords(false);
+      setShowAdminPanel(false);
   };
   
   const handleKill = () => { if (isHunter) socket.emit('attemptKill'); };
@@ -239,8 +258,29 @@ function App() {
                     myId={myId}
                     spectatingId={isSpectator ? getSpectatingId() : null}
                     gamePhase={gamePhase}
+                    showCoords={showCoords}
                 />
             </div>
+
+            {/* ADMIN PANEL */}
+            {showAdminPanel && (
+                <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/50 pointer-events-auto">
+                    <div className="bg-slate-800 p-6 rounded-xl border border-blue-500/50 w-96 max-w-full shadow-2xl">
+                         <div className="flex justify-between items-center mb-4">
+                             <h2 className="text-xl font-bold text-blue-400">ADMINISTRATOR</h2>
+                             <button onClick={() => setShowAdminPanel(false)} className="text-gray-400 hover:text-white">✕</button>
+                         </div>
+                         <div className="space-y-2 text-sm text-gray-300 font-mono">
+                             <p><span className="text-yellow-400">/adminpw [code]</span> - Login</p>
+                             <p><span className="text-yellow-400">/ban [user]</span> - Ban player</p>
+                             <p><span className="text-yellow-400">/unban [user]</span> - Unban player</p>
+                             <p><span className="text-yellow-400">/location</span> - Toggle coords (Self)</p>
+                             <p><span className="text-yellow-400">/setlocation x,y,z</span> - Set Spawn</p>
+                             <p><span className="text-yellow-400">/ainfo</span> - This menu</p>
+                         </div>
+                    </div>
+                </div>
+            )}
 
             {roleMessage && (
                 <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
@@ -287,7 +327,7 @@ function App() {
                                     </div>
                                     <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-hide">
                                         {chatMessages.map((msg, i) => (
-                                            <div key={i} className={`text-xs break-words ${msg.isSystem ? 'text-yellow-400 italic' : 'text-white'}`}>
+                                            <div key={i} className={`text-xs break-words ${msg.isSystem ? 'text-yellow-400 italic font-bold' : 'text-white'}`}>
                                                 {!msg.isSystem && <span className="text-blue-400 font-bold">{msg.sender}: </span>}
                                                 {msg.text}
                                             </div>
@@ -314,7 +354,7 @@ function App() {
                                     onClick={() => { setIsChatOpen(true); setLastMessageTime(Date.now()); }}
                                 >
                                     {chatMessages.slice(-3).map((msg, i) => (
-                                        <div key={msg.id || i} className="bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-[10px] text-white break-words border-l-2 border-blue-500 max-w-full">
+                                        <div key={msg.id || i} className={`bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-[10px] text-white break-words border-l-2 max-w-full ${msg.isSystem ? 'border-yellow-500 text-yellow-300' : 'border-blue-500'}`}>
                                             {msg.isSystem ? msg.text : `${msg.sender}: ${msg.text}`}
                                         </div>
                                     ))}
