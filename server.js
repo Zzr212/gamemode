@@ -18,24 +18,45 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3000;
+const ADMIN_PASSWORD = "2702";
 
+// --- DATABASE ---
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) { fs.mkdirSync(DATA_DIR); }
+
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const BANNED_FILE = path.join(DATA_DIR, 'banned.json');
+const SPAWN_FILE = path.join(DATA_DIR, 'spawn.json');
+
 if (!fs.existsSync(USERS_FILE)) { fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2)); }
+if (!fs.existsSync(BANNED_FILE)) { fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: [] }, null, 2)); }
+if (!fs.existsSync(SPAWN_FILE)) { fs.writeFileSync(SPAWN_FILE, JSON.stringify({ center: { x: 0, y: 3, z: 0 } }, null, 2)); }
+
 const db = {
     getUsers: () => { try { return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8')).users; } catch (e) { return []; } },
     saveUser: (user) => { const users = db.getUsers(); users.push(user); fs.writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2)); },
     findUserByUsername: (username) => db.getUsers().find(u => u.username.toLowerCase() === username.toLowerCase()),
     createUser: (username, email, password) => { const newUser = { id: uuidv4(), username, email, password }; db.saveUser(newUser); return { id: newUser.id, username: newUser.username, email: newUser.email }; },
-    validateLogin: (username, password) => { const user = db.findUserByUsername(username); if (user && user.password === password) return { id: user.id, username: user.username, email: user.email }; return null; }
+    validateLogin: (username, password) => { const user = db.findUserByUsername(username); if (user && user.password === password) return { id: user.id, username: user.username, email: user.email }; return null; },
+    
+    // Admin features
+    getBanned: () => { try { return JSON.parse(fs.readFileSync(BANNED_FILE, 'utf-8')).banned; } catch (e) { return []; } },
+    addBan: (username) => { const list = db.getBanned(); if (!list.includes(username.toLowerCase())) { list.push(username.toLowerCase()); fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: list }, null, 2)); } },
+    removeBan: (username) => { let list = db.getBanned(); list = list.filter(u => u !== username.toLowerCase()); fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: list }, null, 2)); },
+    isBanned: (username) => { return db.getBanned().includes(username.toLowerCase()); },
+    
+    getSpawnCenter: () => { try { return JSON.parse(fs.readFileSync(SPAWN_FILE, 'utf-8')).center; } catch (e) { return { x: 0, y: 3, z: 0 }; } },
+    setSpawnCenter: (x, y, z) => { fs.writeFileSync(SPAWN_FILE, JSON.stringify({ center: { x, y, z } }, null, 2)); }
 };
 
+// --- API ---
 app.post('/api/register', (req, res) => {
     try {
         const { username, email, password } = req.body;
         if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
         if (db.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
+        if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED.' });
+        
         const user = db.createUser(username, email, password);
         console.log(`[AUTH] New user: ${username}`);
         res.json({ success: true, user });
@@ -45,6 +66,8 @@ app.post('/api/register', (req, res) => {
 app.post('/api/login', (req, res) => {
     try {
         const { username, password } = req.body;
+        if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED.' });
+        
         const user = db.validateLogin(username, password);
         if (!user) return res.status(401).json({ error: 'Invalid credentials' });
         console.log(`[AUTH] Login: ${username}`);
@@ -52,6 +75,7 @@ app.post('/api/login', (req, res) => {
     } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
+// --- GAME STATE ---
 const GamePhase = { WAITING: 'WAITING', COUNTDOWN: 'COUNTDOWN', IN_PROGRESS: 'IN_PROGRESS', GAME_OVER: 'GAME_OVER' };
 const Role = { NONE: 'NONE', HUNTER: 'HUNTER', HIDER: 'HIDER', SPECTATOR: 'SPECTATOR' };
 
@@ -59,6 +83,7 @@ let players = {};
 let gamePhase = GamePhase.WAITING;
 let gameTimer = 0;
 let lastHunterUserId = null; 
+const adminAttempts = {}; 
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
@@ -66,12 +91,32 @@ const GAME_OVER_TIME = 4;
 const KILL_DISTANCE = 3.0;
 const AFK_TIMEOUT = 120 * 1000; 
 
-const getRandomSpawn = () => ({ x: (Math.random() * 10) - 5, y: 3, z: (Math.random() * 10) - 5 });
-
-const sendSystemMessage = (text) => {
-    io.emit('chatMessage', { id: uuidv4(), sender: 'SYSTEM', text: text, isSystem: true, timestamp: Date.now() });
+const getRandomSpawn = () => {
+    const center = db.getSpawnCenter();
+    return { x: center.x + (Math.random() * 10) - 5, y: center.y, z: center.z + (Math.random() * 10) - 5 };
 };
 
+const sendSystemMessage = (text, socketId = null, isError = false) => {
+    const msg = { 
+        id: uuidv4(), 
+        sender: isError ? 'ERROR' : 'SYSTEM', 
+        text: text, 
+        isSystem: true, 
+        timestamp: Date.now() 
+    };
+    if (socketId) {
+        io.to(socketId).emit('chatMessage', msg);
+    } else {
+        io.emit('chatMessage', msg);
+    }
+};
+
+const broadcastBanMessage = (username, byAdmin = null) => {
+    const text = byAdmin ? `${username} has been BANNED by ${byAdmin}.` : `${username} has been BANNED by server.`;
+    io.emit('chatMessage', { id: uuidv4(), sender: 'SERVER', text: text.toUpperCase(), isSystem: true, timestamp: Date.now() });
+};
+
+// --- LOOPS ---
 setInterval(() => {
     const now = Date.now();
     let changed = false;
@@ -134,7 +179,6 @@ setInterval(() => {
   else if (gamePhase === GamePhase.GAME_OVER) {
       gameTimer--;
       if (gameTimer <= 0) {
-          console.log("[SERVER] Buffer finished. Resetting.");
           if (Object.keys(players).length >= 2) {
             gamePhase = GamePhase.COUNTDOWN;
             gameTimer = COUNTDOWN_TIME;
@@ -196,39 +240,48 @@ function endGame(reason) {
     console.log(`[SERVER] End Game: ${reason}`);
     io.emit('gameMessage', reason);
     sendSystemMessage(`Round Over: ${reason}`);
-    
-    // Set 4s Buffer
     gamePhase = GamePhase.GAME_OVER;
     gameTimer = GAME_OVER_TIME;
-    
     broadcastGameState();
 }
 
+// --- SOCKETS ---
 io.on('connection', (socket) => {
   const deviceId = socket.handshake.auth.deviceId;
   const userId = socket.handshake.auth.userId;
   const username = socket.handshake.auth.username || 'Guest';
 
-  if (!userId) return;
+  if (!userId) { socket.disconnect(); return; }
+  
+  if (db.isBanned(username)) {
+      socket.emit('forceDisconnect', "You are BANNED.");
+      socket.disconnect();
+      return;
+  }
 
+  // --- GHOST FIX START ---
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
   if (oldSid) {
-      const p = players[oldSid];
-      delete players[oldSid]; // Remove old key to prevent duplicates
+      console.log(`[SERVER] Reconnect Detected: ${username} (Old: ${oldSid} -> New: ${socket.id})`);
+      const recoveredPlayer = { ...players[oldSid] };
       
+      // Notify clients to remove old mesh
+      io.emit('playerDisconnected', oldSid);
+      
+      delete players[oldSid]; 
       const oldSocket = io.sockets.sockets.get(oldSid);
       if (oldSocket) oldSocket.disconnect(true);
       
-      p.id = socket.id;
-      p.isDisconnected = false;
-      p.disconnectTime = null;
-      players[socket.id] = p; // Add new key
+      recoveredPlayer.id = socket.id;
+      recoveredPlayer.isDisconnected = false;
+      recoveredPlayer.disconnectTime = null;
+      players[socket.id] = recoveredPlayer; 
       
       socket.emit('currentPlayers', players);
-      socket.broadcast.emit('newPlayer', p);
+      socket.broadcast.emit('newPlayer', recoveredPlayer);
       sendSystemMessage(`${username} reconnected.`);
-      console.log(`[SERVER] Reconnect Swap: ${username}`);
-  }
+  } 
+  // --- GHOST FIX END ---
 
   socket.on('requestGameStart', () => {
       if (players[socket.id]) {
@@ -247,7 +300,8 @@ io.on('connection', (socket) => {
         userId, username, deviceId,
         position: getRandomSpawn(),
         rotation: 0, animation: 'Idle', color: '#fff',
-        role: initialRole, isDead: false, isDisconnected: false
+        role: initialRole, isDead: false, isDisconnected: false,
+        isAdmin: false
       };
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -258,7 +312,7 @@ io.on('connection', (socket) => {
 
   socket.on('move', (pos, rot, anim) => {
     const p = players[socket.id];
-    if (gamePhase === GamePhase.GAME_OVER) return; // Freeze during buffer
+    if (gamePhase === GamePhase.GAME_OVER) return; 
     
     if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = pos;
@@ -281,18 +335,127 @@ io.on('connection', (socket) => {
               io.emit('playerKilled', hider.id);
               io.emit('playerMoved', hider);
               sendSystemMessage(`${hunter.username} killed ${hider.username}`);
-              console.log(`[SERVER] Kill: ${hunter.username} -> ${hider.username}`);
               broadcastGameState(); 
               break; 
           }
       }
   });
 
+  // --- COMMAND SYSTEM ---
   socket.on('chatMessage', (text) => {
       if(!text) return;
-      const safe = text.substring(0,50);
-      console.log(`[CHAT] ${players[socket.id]?.username}: ${safe}`);
-      io.emit('chatMessage', { id: uuidv4(), sender: players[socket.id]?.username || '?', text: safe, isSystem: false, timestamp: Date.now() });
+      const p = players[socket.id];
+      if (!p) return;
+
+      const trimmedText = text.trim();
+      
+      // 1. Check if it's a command
+      if (trimmedText.startsWith('/')) {
+          const parts = trimmedText.split(' ');
+          const command = parts[0].toLowerCase();
+          const arg1 = parts[1];
+
+          console.log(`[COMMAND] ${p.username} tried: ${command}`);
+
+          // Login Admin
+          if (command === '/adminpw') {
+              if (arg1 === ADMIN_PASSWORD) {
+                  p.isAdmin = true;
+                  sendSystemMessage("ACCESS GRANTED. You are now Admin.", socket.id);
+                  socket.emit('toggleAdminPanel', true);
+                  adminAttempts[p.userId] = 0; 
+              } else {
+                  const attempts = (adminAttempts[p.userId] || 0) + 1;
+                  adminAttempts[p.userId] = attempts;
+                  if (attempts >= 3) {
+                      db.addBan(p.username);
+                      broadcastBanMessage(p.username);
+                      socket.emit('forceDisconnect', "BANNED: Too many failed admin attempts.");
+                      socket.disconnect();
+                  } else {
+                      sendSystemMessage(`ACCESS DENIED. Incorrect password. (${attempts}/3)`, socket.id, true);
+                  }
+              }
+              return; 
+          }
+
+          // ADMIN ONLY
+          if (p.isAdmin) {
+              if (command === '/ban') {
+                  if (!arg1) { sendSystemMessage("Usage: /ban [username]", socket.id, true); return; }
+                  
+                  const targetUser = db.findUserByUsername(arg1);
+                  if (targetUser) {
+                      db.addBan(targetUser.username);
+                      broadcastBanMessage(targetUser.username, p.username);
+                      // Kick
+                      const targetSocketId = Object.keys(players).find(k => players[k].username.toLowerCase() === arg1.toLowerCase());
+                      if (targetSocketId) {
+                          const targetSocket = io.sockets.sockets.get(targetSocketId);
+                          if (targetSocket) {
+                              targetSocket.emit('forceDisconnect', "You have been BANNED by an administrator.");
+                              targetSocket.disconnect();
+                          }
+                      }
+                  } else {
+                      sendSystemMessage(`User '${arg1}' not found in database.`, socket.id, true);
+                  }
+                  return;
+              }
+
+              if (command === '/unban') {
+                  if (!arg1) { sendSystemMessage("Usage: /unban [username]", socket.id, true); return; }
+                  if (db.isBanned(arg1)) {
+                      db.removeBan(arg1);
+                      sendSystemMessage(`User '${arg1}' unbanned.`, socket.id);
+                      io.emit('chatMessage', { id: uuidv4(), sender: 'SERVER', text: `${arg1} has been unbanned by ${p.username}`, isSystem: true, timestamp: Date.now() });
+                  } else {
+                      sendSystemMessage(`User '${arg1}' is not banned.`, socket.id, true);
+                  }
+                  return;
+              }
+
+              if (command === '/location') {
+                  socket.emit('toggleLocationDisplay', true);
+                  sendSystemMessage("Toggled location display.", socket.id);
+                  return;
+              }
+
+              if (command === '/setlocation') {
+                  try {
+                      if (!arg1) throw new Error();
+                      const coords = arg1.split(',');
+                      if (coords.length === 3) {
+                          const x = parseFloat(coords[0]);
+                          const y = parseFloat(coords[1]);
+                          const z = parseFloat(coords[2]);
+                          if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                              db.setSpawnCenter(x, y, z);
+                              sendSystemMessage(`Spawn center updated to ${x}, ${y}, ${z}`, socket.id);
+                          } else { throw new Error(); }
+                      } else { throw new Error(); }
+                  } catch (e) {
+                      sendSystemMessage("Invalid format. Use: /setlocation x,y,z", socket.id, true);
+                  }
+                  return;
+              }
+
+              if (command === '/ainfo') {
+                  socket.emit('toggleAdminPanel', true);
+                  return;
+              }
+              
+              sendSystemMessage(`Unknown Admin Command: ${command}`, socket.id, true);
+              return;
+          } else {
+              sendSystemMessage(`Unknown Command: ${command}`, socket.id, true);
+              return;
+          }
+      }
+
+      // 2. Normal Chat
+      console.log(`[CHAT] ${p.username}: ${trimmedText.substring(0,50)}`);
+      io.emit('chatMessage', { id: uuidv4(), sender: p.username, text: trimmedText.substring(0,50), isSystem: false, timestamp: Date.now() });
   });
 
   socket.on('leaveGame', () => {

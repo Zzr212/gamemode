@@ -499,7 +499,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const distPath = path.join(__dirname, 'dist');
+const distPath = path.join(__dirname, '../dist'); // Updated path for built artifacts
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath) as any);
     app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
