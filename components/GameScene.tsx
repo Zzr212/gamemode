@@ -1,4 +1,4 @@
-import React, { useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
+import React, { Component, useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { PerspectiveCamera, Sky, Loader, PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
@@ -15,8 +15,11 @@ interface ErrorBoundaryState {
   hasError: boolean;
 }
 
-class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public state: ErrorBoundaryState = { hasError: false };
+class ModelErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
   
   static getDerivedStateFromError() { return { hasError: true }; }
   
@@ -37,8 +40,8 @@ interface GameSceneProps {
 const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   const groupRef = useRef<THREE.Group>(null);
   
-  // Don't render spectators, dead players, or DISCONNECTED players
-  if (data.role === Role.SPECTATOR || data.isDead) return null;
+  // CRITICAL FIX: Do NOT return early here before hooks are called.
+  // This was causing the "White Screen" / "Rendered fewer hooks" crash on death.
 
   useEffect(() => {
     if (groupRef.current) {
@@ -47,29 +50,33 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   }, []); 
 
   useFrame((_, delta) => {
-    if (groupRef.current) {
-      const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
-      const distance = groupRef.current.position.distanceTo(targetPos);
-      
-      // If distance is large (respawn/teleport), snap immediately
-      if (distance > 3) {
-          groupRef.current.position.copy(targetPos);
-      } else {
-          // Smooth interpolation
-          // Lerp factor of 10-15 is standard for network smoothing
-          groupRef.current.position.lerp(targetPos, 12 * delta);
-      }
+    // Logic check inside the hook instead of preventing the hook
+    if (data.role === Role.SPECTATOR || data.isDead || !groupRef.current) return;
 
-      let currentRot = groupRef.current.rotation.y;
-      let targetRot = data.rotation;
-      let diff = targetRot - currentRot;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
+    const targetPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
+    const distance = groupRef.current.position.distanceTo(targetPos);
       
-      // Smooth rotation
-      groupRef.current.rotation.y += diff * 15 * delta;
+    // If distance is large (respawn/teleport), snap immediately
+    if (distance > 3) {
+        groupRef.current.position.copy(targetPos);
+    } else {
+        // Smooth interpolation
+        // Lerp factor of 10-15 is standard for network smoothing
+        groupRef.current.position.lerp(targetPos, 12 * delta);
     }
+
+    let currentRot = groupRef.current.rotation.y;
+    let targetRot = data.rotation;
+    let diff = targetRot - currentRot;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+      
+    // Smooth rotation
+    groupRef.current.rotation.y += diff * 15 * delta;
   });
+
+  // Safe to return null here AFTER hooks have run
+  if (data.role === Role.SPECTATOR || data.isDead) return null;
 
   return (
     <group ref={groupRef}>
