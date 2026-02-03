@@ -478,8 +478,8 @@ io.on('connection', (socket) => {
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath) as any);
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
 } else {
-    app.get('/', (req, res) => res.send("Server running (No Build)."));
+    app.get('/', (_req, res) => res.send("Server running (No Build)."));
 }
 httpServer.listen(PORT, () => console.log(`Server running on port ${PORT}`));
