@@ -131,11 +131,11 @@ function App() {
         if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     };
 
-    const onToggleLocationDisplay = (show: boolean) => {
+    const onToggleLocationDisplay = (_show: boolean) => {
         setShowCoords(prev => !prev); // Toggle
     };
 
-    const onToggleAdminPanel = (show: boolean) => {
+    const onToggleAdminPanel = (_show: boolean) => {
         setShowAdminPanel(true);
     };
 
