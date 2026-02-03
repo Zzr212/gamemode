@@ -1,3 +1,5 @@
+import React from 'react';
+
 export interface Vector3 {
   x: number;
   y: number;
@@ -85,6 +87,31 @@ export interface JoystickData {
 }
 
 // React Three Fiber JSX elements augmentation
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      group: any;
+      primitive: any;
+      mesh: any;
+      instancedMesh: any;
+      boxGeometry: any;
+      circleGeometry: any;
+      sphereGeometry: any;
+      ringGeometry: any;
+      planeGeometry: any;
+      meshBasicMaterial: any;
+      meshStandardMaterial: any;
+      ambientLight: any;
+      directionalLight: any;
+      pointLight: any;
+      spotLight: any;
+      fog: any;
+      color: any;
+      [elemName: string]: any;
+    }
+  }
+}
+
 declare global {
   namespace JSX {
     interface IntrinsicElements {

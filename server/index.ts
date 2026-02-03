@@ -72,8 +72,14 @@ const getRandomSpawn = () => {
     };
 };
 
-const sendSystemMessage = (text: string, socketId?: string) => {
-    const msg = { id: uuidv4(), sender: 'SYSTEM', text: text, isSystem: true, timestamp: Date.now() };
+const sendSystemMessage = (text: string, socketId?: string, isError: boolean = false) => {
+    const msg = { 
+        id: uuidv4(), 
+        sender: isError ? 'ERROR' : 'SYSTEM', 
+        text: text, 
+        isSystem: true, 
+        timestamp: Date.now() 
+    };
     if (socketId) {
         io.to(socketId).emit('chatMessage', msg);
     } else {
@@ -86,12 +92,11 @@ const broadcastBanMessage = (username: string, byAdmin: string | null = null) =>
         ? `${username} has been BANNED by ${byAdmin}.` 
         : `${username} has been BANNED by server.`;
     
-    // Broadcast specialized red system message (simulated by isSystem logic in frontend, or custom formatting)
     io.emit('chatMessage', { 
         id: uuidv4(), 
         sender: 'SERVER', 
         text: text.toUpperCase(), 
-        isSystem: true, // Frontend renders system messages in yellow/special style
+        isSystem: true, 
         timestamp: Date.now() 
     });
 };
@@ -243,42 +248,44 @@ io.on('connection', (socket) => {
 
   if (!userId) { socket.disconnect(); return; }
   
-  // Late Ban Check
   if (db.isBanned(username)) {
       socket.emit('forceDisconnect', "You are BANNED.");
       socket.disconnect();
       return;
   }
 
-  // --- GHOST FIX: RECONNECTION LOGIC ---
+  // --- GHOST FIX START ---
+  // Check if this user is already in the player list with an OLD socket ID
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
   
   if (oldSid) {
-      // 1. Recover state
-      const p = players[oldSid];
+      console.log(`[SERVER] Reconnect Detected: ${username} (Old: ${oldSid} -> New: ${socket.id})`);
       
-      // 2. CRITICAL: Tell everyone the old ID is gone immediately.
+      // 1. Recover state
+      const recoveredPlayer = { ...players[oldSid] };
+      
+      // 2. IMPORTANT: Broadcast 'playerDisconnected' for the OLD ID so clients remove the old mesh
       io.emit('playerDisconnected', oldSid);
       
       // 3. Remove old record from memory
       delete players[oldSid]; 
       
-      // 4. Force disconnect old socket if still lingering
+      // 4. Force disconnect old socket to prevent conflict
       const oldSocket = io.sockets.sockets.get(oldSid);
       if (oldSocket) oldSocket.disconnect(true);
       
-      // 5. Assign new ID and Restore
-      p.id = socket.id;
-      p.isDisconnected = false;
-      p.disconnectTime = undefined;
-      players[socket.id] = p; 
+      // 5. Update state with NEW socket ID
+      recoveredPlayer.id = socket.id;
+      recoveredPlayer.isDisconnected = false;
+      recoveredPlayer.disconnectTime = undefined;
+      players[socket.id] = recoveredPlayer; 
       
-      // 6. Broadcast New Presence
+      // 6. Sync everything up
       socket.emit('currentPlayers', players);
-      socket.broadcast.emit('newPlayer', p);
+      socket.broadcast.emit('newPlayer', recoveredPlayer);
       sendSystemMessage(`${username} reconnected.`);
-      console.log(`[SERVER] Reconnect Swap: ${username} (${oldSid} -> ${socket.id})`);
   } 
+  // --- GHOST FIX END ---
   
   socket.on('requestGameStart', () => {
       // If already exists (handled in reconnection block or just clicking Play while connected)
@@ -340,28 +347,32 @@ io.on('connection', (socket) => {
       }
   });
 
-  // --- CHAT & ADMIN SYSTEM ---
+  // --- COMMAND SYSTEM FIX ---
   socket.on('chatMessage', (text) => {
       if(!text) return;
       const p = players[socket.id];
       if (!p) return;
 
-      const safeText = text.trim();
+      const trimmedText = text.trim();
       
-      // ADMIN COMMANDS INTERCEPTION
-      if (safeText.startsWith('/')) {
-          const parts = safeText.split(' ');
+      // 1. Check if it's a command
+      if (trimmedText.startsWith('/')) {
+          const parts = trimmedText.split(' ');
           const command = parts[0].toLowerCase();
           const arg1 = parts[1];
 
-          // 1. Login Admin
+          console.log(`[COMMAND] ${p.username} tried: ${command}`);
+
+          // --- PUBLIC COMMANDS ---
+
+          // Login Admin
           if (command === '/adminpw') {
               if (arg1 === ADMIN_PASSWORD) {
                   p.isAdmin = true;
-                  sendSystemMessage("You are admin now.", socket.id);
-                  adminAttempts[p.userId] = 0; // Reset attempts
+                  sendSystemMessage("ACCESS GRANTED. You are now Admin.", socket.id);
+                  socket.emit('toggleAdminPanel', true);
+                  adminAttempts[p.userId] = 0; 
               } else {
-                  // Failed attempt
                   const attempts = (adminAttempts[p.userId] || 0) + 1;
                   adminAttempts[p.userId] = attempts;
                   if (attempts >= 3) {
@@ -370,15 +381,17 @@ io.on('connection', (socket) => {
                       socket.emit('forceDisconnect', "BANNED: Too many failed admin attempts.");
                       socket.disconnect();
                   } else {
-                      sendSystemMessage(`Incorrect password. Attempt ${attempts}/3`, socket.id);
+                      sendSystemMessage(`ACCESS DENIED. Incorrect password. (${attempts}/3)`, socket.id, true);
                   }
               }
-              return; // Do not broadcast command
+              return; // Stop processing
           }
 
-          // ADMIN ONLY COMMANDS
+          // --- ADMIN ONLY COMMANDS ---
           if (p.isAdmin) {
               if (command === '/ban') {
+                  if (!arg1) { sendSystemMessage("Usage: /ban [username]", socket.id, true); return; }
+                  
                   const targetUser = db.findUserByUsername(arg1);
                   if (targetUser) {
                       db.addBan(targetUser.username);
@@ -394,30 +407,33 @@ io.on('connection', (socket) => {
                           }
                       }
                   } else {
-                      sendSystemMessage(`User ${arg1} not found.`, socket.id);
+                      sendSystemMessage(`User '${arg1}' not found in database.`, socket.id, true);
                   }
                   return;
               }
 
               if (command === '/unban') {
+                  if (!arg1) { sendSystemMessage("Usage: /unban [username]", socket.id, true); return; }
+
                   if (db.isBanned(arg1)) {
                       db.removeBan(arg1);
-                      sendSystemMessage(`User ${arg1} unbanned.`, socket.id);
+                      sendSystemMessage(`User '${arg1}' unbanned.`, socket.id);
                       io.emit('chatMessage', { id: uuidv4(), sender: 'SERVER', text: `${arg1} has been unbanned by ${p.username}`, isSystem: true, timestamp: Date.now() });
                   } else {
-                      sendSystemMessage(`User ${arg1} is not banned.`, socket.id);
+                      sendSystemMessage(`User '${arg1}' is not banned.`, socket.id, true);
                   }
                   return;
               }
 
               if (command === '/location') {
-                  socket.emit('toggleLocationDisplay', true); // Toggle handled by client receiving event
+                  socket.emit('toggleLocationDisplay', true);
+                  sendSystemMessage("Toggled location display.", socket.id);
                   return;
               }
 
               if (command === '/setlocation') {
-                  // Expected format: /setlocation 12.5,3,4.5
                   try {
+                      if (!arg1) throw new Error();
                       const coords = arg1.split(',');
                       if (coords.length === 3) {
                           const x = parseFloat(coords[0]);
@@ -433,7 +449,7 @@ io.on('connection', (socket) => {
                           throw new Error();
                       }
                   } catch (e) {
-                      sendSystemMessage("Invalid format. Use: /setlocation x,y,z", socket.id);
+                      sendSystemMessage("Invalid format. Use: /setlocation x,y,z", socket.id, true);
                   }
                   return;
               }
@@ -442,15 +458,23 @@ io.on('connection', (socket) => {
                   socket.emit('toggleAdminPanel', true);
                   return;
               }
+              
+              // If admin types unknown command
+              sendSystemMessage(`Unknown Admin Command: ${command}`, socket.id, true);
+              return;
+
+          } else {
+              // If non-admin types unknown command or tries admin command
+              sendSystemMessage(`Unknown Command: ${command}`, socket.id, true);
+              return;
           }
       }
 
-      // Normal Chat
-      console.log(`[CHAT] ${p.username}: ${safeText.substring(0,50)}`);
-      io.emit('chatMessage', { id: uuidv4(), sender: p.username, text: safeText.substring(0,50), isSystem: false, timestamp: Date.now() });
+      // 2. Normal Chat
+      console.log(`[CHAT] ${p.username}: ${trimmedText.substring(0,50)}`);
+      io.emit('chatMessage', { id: uuidv4(), sender: p.username, text: trimmedText.substring(0,50), isSystem: false, timestamp: Date.now() });
   });
 
-  // --- STRICT LEAVE ---
   socket.on('leaveGame', () => {
       if (players[socket.id]) {
           console.log(`[SERVER] Explicit Leave: ${players[socket.id].username}`);
