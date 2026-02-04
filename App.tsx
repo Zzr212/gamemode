@@ -231,7 +231,7 @@ function App() {
                             <div className="w-64 h-48 bg-black/60 backdrop-blur-md rounded-lg border border-white/10 flex flex-col">
                                 <div className="flex justify-between p-2 bg-black/40"><span className="text-[10px] text-gray-400 font-bold">CHAT</span><button onClick={()=>setIsChatOpen(false)} className="text-white">X</button></div>
                                 <div className="flex-1 overflow-y-auto p-2 space-y-1"><div ref={chatEndRef} />{chatMessages.map((m,i)=><div key={i} className={`text-xs ${m.isSystem?'text-yellow-400':'text-white'}`}>{!m.isSystem && <span className="text-blue-400">{m.sender}: </span>}{m.text}</div>)}</div>
-                                <form onSubmit={(e)=>{e.preventDefault(); if(chatInput.trim()){socket.emit('chatMessage',chatInput.trim()); setChatInput('');}}} className="p-2 flex gap-2"><input className="flex-1 bg-transparent border-b text-white text-xs" value={chatInput} onChange={e=>setChatInput(e.target.value)} /><button className="text-blue-400">></button></form>
+                                <form onSubmit={(e)=>{e.preventDefault(); if(chatInput.trim()){socket.emit('chatMessage',chatInput.trim()); setChatInput('');}}} className="p-2 flex gap-2"><input className="flex-1 bg-transparent border-b text-white text-xs" value={chatInput} onChange={e=>setChatInput(e.target.value)} /><button className="text-blue-400">{'>'}</button></form>
                             </div>
                         )}
                     </div>
