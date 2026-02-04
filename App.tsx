@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Joystick } from './components/Joystick';
 import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
@@ -34,10 +34,8 @@ function App() {
   // CHAT STATE
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [lastMessageTime, setLastMessageTime] = useState(0);
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [chatOpacity, setChatOpacity] = useState(1);
 
   // ADMIN STATE
   const [showCoords, setShowCoords] = useState(false);
@@ -121,7 +119,7 @@ function App() {
 
     const onGameMessage = (msg: string) => { if (msg.includes("WIN") || msg.includes("Time")) { setRoleMessage(msg); setTimeout(() => setRoleMessage(null), 4000); } };
     const onPlayerKilled = (id: string) => { if (id === myId) { setRoleMessage("YOU DIED"); setTimeout(() => setRoleMessage(null), 3000); } };
-    const onChatMessage = (msg: ChatMessage) => { setChatMessages(prev => [...prev.slice(-19), msg]); setLastMessageTime(Date.now()); if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); };
+    const onChatMessage = (msg: ChatMessage) => { setChatMessages(prev => [...prev.slice(-19), msg]); if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); };
     const onToggleLocationDisplay = (_show: boolean) => setShowCoords(prev => !prev);
     const onToggleAdminPanel = (_show: boolean) => setShowAdminPanel(true);
     const onSettingsUpdated = (newSettings: GameSettings) => setGameSettings(newSettings);
@@ -189,6 +187,7 @@ function App() {
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden select-none touch-none">
+      {appState === 'AUTH' && <AuthScreen onLogin={handleLoginSuccess} />}
       {appState === 'MENU' && <MainMenu onPlay={handlePlayGame} />}
 
       {appState === 'GAME' && (
@@ -226,7 +225,7 @@ function App() {
                 <div className="w-full flex justify-between items-start pt-2 px-2 md:px-4">
                     {/* CHAT */}
                     <div className="pointer-events-auto flex flex-col items-start w-1/3 z-50">
-                        {!isChatOpen && <button onClick={() => { setIsChatOpen(true); setLastMessageTime(Date.now()); }} className={`w-10 h-10 bg-black/50 hover:bg-black/70 rounded-full flex items-center justify-center border border-white/10 transition-opacity ${chatOpacity===0?'opacity-50':'opacity-100'}`}><svg className="w-5 h-5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg></button>}
+                        {!isChatOpen && <button onClick={() => { setIsChatOpen(true); }} className={`w-10 h-10 bg-black/50 hover:bg-black/70 rounded-full flex items-center justify-center border border-white/10 transition-opacity`}><svg className="w-5 h-5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg></button>}
                         {isChatOpen && (
                             <div className="w-64 h-48 bg-black/60 backdrop-blur-md rounded-lg border border-white/10 flex flex-col">
                                 <div className="flex justify-between p-2 bg-black/40"><span className="text-[10px] text-gray-400 font-bold">CHAT</span><button onClick={()=>setIsChatOpen(false)} className="text-white">X</button></div>
