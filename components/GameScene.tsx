@@ -1,8 +1,8 @@
 import React, { Component, useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { PerspectiveCamera, Sky, Loader, PerformanceMonitor, Html } from '@react-three/drei';
+import { PerspectiveCamera, Sky, Loader, PerformanceMonitor, Html, SpotLight } from '@react-three/drei';
 import * as THREE from 'three';
-import { JoystickData, PlayerState, Vector3, Role, GamePhase } from '../types';
+import { JoystickData, PlayerState, Vector3, Role, GamePhase, GameSettings } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
@@ -34,7 +34,8 @@ interface GameSceneProps {
   myId: string | null;
   spectatingId: string | null;
   gamePhase: GamePhase;
-  showCoords: boolean; // Admin toggle
+  showCoords: boolean;
+  settings: GameSettings;
 }
 
 // --- REMOTE PLAYER COMPONENT ---
@@ -168,7 +169,9 @@ const PlayerController: React.FC<{
   targetPosRef: React.MutableRefObject<THREE.Vector3>;
   gamePhase: GamePhase; 
   showCoords: boolean;
-}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef, gamePhase, showCoords }) => {
+  role: Role;
+  settings: GameSettings;
+}> = ({ joystickData, cameraRotation, jumpPressed, onMove, initialPos, targetPosRef, gamePhase, showCoords, role, settings }) => {
   const { scene } = useThree();
   
   const pos = useRef(new THREE.Vector3(initialPos.x, initialPos.y, initialPos.z));
@@ -179,7 +182,6 @@ const PlayerController: React.FC<{
   
   const animationRef = useRef('Idle');
   const [visualAnimation, setVisualAnimation] = useState('Idle');
-  // For coords display
   const [coordText, setCoordText] = useState("");
   
   const downRaycaster = useRef(new THREE.Raycaster());
@@ -188,7 +190,9 @@ const PlayerController: React.FC<{
   const playerGroupRef = useRef<THREE.Group>(null);
   const modelRotationGroupRef = useRef<THREE.Group>(null);
 
-  const MOVE_SPEED = 6.0; 
+  // Dynamic Speed
+  const MOVE_SPEED = role === Role.HUNTER ? settings.hunterSpeed : settings.hiderSpeed;
+  
   const GRAVITY = 18.0;   
   const JUMP_VELOCITY = 8.0; 
   const COLLIDER_NAME = 'ground-collider';
@@ -329,7 +333,6 @@ const PlayerController: React.FC<{
         setVisualAnimation(newAnim);
     }
     
-    // Update Coords text only if showing to save perf
     if (showCoords) {
         setCoordText(`X: ${pos.current.x.toFixed(1)}, Y: ${pos.current.y.toFixed(1)}, Z: ${pos.current.z.toFixed(1)}`);
     }
@@ -348,6 +351,21 @@ const PlayerController: React.FC<{
         <group ref={modelRotationGroupRef}>
             <PlayerModel position={{x:0,y:0,z:0}} rotation={0} animation={visualAnimation} />
         </group>
+        {/* HUNTER VISION: Dynamic Spotlight attached to player */}
+        {role === Role.HUNTER && (
+             <SpotLight 
+                position={[0, 10, 0]} 
+                angle={0.7} 
+                penumbra={0.2} 
+                distance={settings.hunterVisionRadius} 
+                attenuation={5} 
+                anglePower={5} 
+                intensity={5}
+                color="white"
+                castShadow 
+                target={playerGroupRef.current || undefined}
+             />
+        )}
         {showCoords && (
              <Html position={[0, 2.2, 0]} center>
                 <div className="bg-black/70 text-green-400 text-xs px-2 py-1 rounded font-mono whitespace-nowrap border border-green-500/30">
@@ -375,7 +393,7 @@ const SpectatorController: React.FC<{
 }
 
 // --- MAIN GAME SCENE ---
-export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId, gamePhase, showCoords }) => {
+export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotation, jumpPressed, players, myId, spectatingId, gamePhase, showCoords, settings }) => {
   const [dpr, setDpr] = useState(1.5); 
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
 
@@ -384,6 +402,7 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
   }, []);
 
   const isSpectating = !myId || !players[myId] || players[myId].role === Role.SPECTATOR || players[myId].isDead;
+  const isHunter = myId && players[myId]?.role === Role.HUNTER;
 
   return (
     <>
@@ -396,12 +415,22 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
         <PerspectiveCamera makeDefault position={[0, 20, 20]} fov={60} far={100} onUpdate={c => c.lookAt(0, 0, 0)}/>
 
-        <fog attach="fog" args={['#eefbff', 20, 80]} />
-        <color attach="background" args={['#eefbff']} />
-
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[50, 80, 30]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0001}/>
-        <Sky sunPosition={[100, 20, 100]} turbidity={0.5} rayleigh={0.5} mieCoefficient={0.005} mieDirectionalG={0.8} />
+        {/* FOG OF WAR LOGIC: Dark atmosphere for Hunter, Bright for Hiders */}
+        {isHunter ? (
+             <>
+                 <fog attach="fog" args={['#000000', 5, 30]} />
+                 <color attach="background" args={['#050505']} />
+                 <ambientLight intensity={0.1} /> 
+             </>
+        ) : (
+            <>
+                <fog attach="fog" args={['#eefbff', 20, 80]} />
+                <color attach="background" args={['#eefbff']} />
+                <ambientLight intensity={0.6} />
+                <directionalLight position={[50, 80, 30]} intensity={1.5} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0001}/>
+                <Sky sunPosition={[100, 20, 100]} turbidity={0.5} rayleigh={0.5} mieCoefficient={0.005} mieDirectionalG={0.8} />
+            </>
+        )}
         
         <Suspense fallback={null}>
           <ModelErrorBoundary>
@@ -422,6 +451,8 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
                     targetPosRef={cameraTargetRef}
                     gamePhase={gamePhase}
                     showCoords={showCoords}
+                    role={players[myId].role}
+                    settings={settings}
                 />
             ) : (
                 <SpectatorController 

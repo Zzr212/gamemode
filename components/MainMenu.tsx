@@ -125,28 +125,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onPlay }) => {
         {/* Left Side: Space for character */}
         <div className="w-1/3 md:w-1/2 h-full"></div>
 
-        {/* Right Side: News & Actions */}
+        {/* Right Side: Actions */}
         <div className="w-2/3 md:w-1/2 h-full flex flex-col justify-center items-end gap-3 md:gap-6 pointer-events-auto">
             
-            {/* News Card - Made Compact */}
-            <div className="w-full max-w-sm bg-black/60 backdrop-blur-md border border-white/10 rounded-lg p-4 shadow-2xl animate-fade-in-up">
-                <div className="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
-                    <h2 className="text-white font-bold text-sm md:text-lg tracking-wider">LATEST NEWS</h2>
-                    <span className="text-[10px] md:text-xs text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded">V 1.2</span>
-                </div>
-                <div className="space-y-2 md:space-y-4">
-                    <div className="group cursor-pointer">
-                        <h3 className="text-blue-300 font-semibold text-xs md:text-sm group-hover:text-blue-200 transition-colors">Winter Update is Live!</h3>
-                        <p className="text-gray-400 text-[10px] md:text-xs mt-0.5 leading-tight hidden sm:block">Experience the new snowy map and improved mechanics.</p>
-                    </div>
-                    {/* Hide second news item on very small screens to save space */}
-                    <div className="group cursor-pointer hidden md:block">
-                        <h3 className="text-blue-300 font-semibold text-sm group-hover:text-blue-200 transition-colors">Server Maintenance</h3>
-                        <p className="text-gray-400 text-xs mt-1">Scheduled maintenance every Tuesday at 4 AM UTC.</p>
-                    </div>
-                </div>
-            </div>
-
             {/* Play Button Area */}
             <div className="flex flex-col items-end w-full max-w-sm">
                 <button 

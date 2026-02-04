@@ -24,6 +24,7 @@ export interface UserProfile {
   id: string;
   username: string;
   email: string;
+  isAdmin?: boolean; // Persistent Admin Flag
 }
 
 export interface PlayerState {
@@ -37,15 +38,23 @@ export interface PlayerState {
   color: string;
   role: Role;
   isDead: boolean;
-  isAdmin?: boolean; // New Developer Status
+  isAdmin?: boolean; 
   isDisconnected: boolean;
   disconnectTime?: number;
+}
+
+export interface GameSettings {
+  hunterSpeed: number;
+  hiderSpeed: number;
+  hunterVisionRadius: number; // Distance of the light
+  hunterVisionAngle: number; // Width of the cone (if using cone) or general intensity
 }
 
 export interface GameStateData {
   phase: GamePhase;
   timer: number; // seconds
   survivors: number; // Active hiders count
+  settings: GameSettings; // Sync settings to client
 }
 
 export interface ChatMessage {
@@ -70,6 +79,7 @@ export interface ServerToClientEvents {
   // Admin events
   toggleLocationDisplay: (show: boolean) => void;
   toggleAdminPanel: (show: boolean) => void;
+  settingsUpdated: (settings: GameSettings) => void;
 }
 
 export interface ClientToServerEvents {
@@ -79,6 +89,9 @@ export interface ClientToServerEvents {
   attemptKill: () => void; 
   chatMessage: (text: string) => void; 
   leaveGame: () => void; 
+  // Admin
+  updateSettings: (settings: GameSettings) => void;
+  banPlayer: (username: string) => void;
 }
 
 export interface JoystickData {

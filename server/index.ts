@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { PlayerState, GamePhase, Role } from '../types.js';
+import { PlayerState, GamePhase, Role, GameSettings } from '../types.js';
 import { db } from './db.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -45,7 +45,7 @@ app.post('/api/login', (req, res) => {
     const user = db.validateLogin(username, password);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     
-    console.log(`[AUTH] User logged in: ${username}`);
+    console.log(`[AUTH] User logged in: ${username} (Admin: ${user.isAdmin})`);
     res.json({ success: true, user });
 });
 
@@ -54,7 +54,8 @@ let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
-const adminAttempts: Record<string, number> = {}; // Track password attempts by userID
+const adminAttempts: Record<string, number> = {}; 
+let gameSettings: GameSettings = db.getSettings();
 
 const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
@@ -177,7 +178,12 @@ setInterval(() => {
 
 function broadcastGameState() {
     const survivors = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead).length;
-    io.emit('gameStateUpdate', { phase: gamePhase, timer: gameTimer, survivors: survivors });
+    io.emit('gameStateUpdate', { 
+        phase: gamePhase, 
+        timer: gameTimer, 
+        survivors: survivors,
+        settings: gameSettings 
+    });
 }
 
 function startGame() {
@@ -254,33 +260,26 @@ io.on('connection', (socket) => {
       return;
   }
 
+  // Check DB for persistent admin status
+  const userRecord = db.findUserByUsername(username);
+  const isPersistentAdmin = userRecord?.isAdmin || false;
+
   // --- GHOST FIX START ---
-  // Check if this user is already in the player list with an OLD socket ID
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
   
   if (oldSid) {
-      console.log(`[SERVER] Reconnect Detected: ${username} (Old: ${oldSid} -> New: ${socket.id})`);
-      
-      // 1. Recover state
+      console.log(`[SERVER] Reconnect Detected: ${username}`);
       const recoveredPlayer = { ...players[oldSid] };
-      
-      // 2. IMPORTANT: Broadcast 'playerDisconnected' for the OLD ID so clients remove the old mesh
       io.emit('playerDisconnected', oldSid);
-      
-      // 3. Remove old record from memory
       delete players[oldSid]; 
-      
-      // 4. Force disconnect old socket to prevent conflict
       const oldSocket = io.sockets.sockets.get(oldSid);
       if (oldSocket) oldSocket.disconnect(true);
       
-      // 5. Update state with NEW socket ID
       recoveredPlayer.id = socket.id;
       recoveredPlayer.isDisconnected = false;
-      recoveredPlayer.disconnectTime = undefined;
+      recoveredPlayer.isAdmin = isPersistentAdmin; // Ensure admin sync
       players[socket.id] = recoveredPlayer; 
       
-      // 6. Sync everything up
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', recoveredPlayer);
       sendSystemMessage(`${username} reconnected.`);
@@ -288,7 +287,6 @@ io.on('connection', (socket) => {
   // --- GHOST FIX END ---
   
   socket.on('requestGameStart', () => {
-      // If already exists (handled in reconnection block or just clicking Play while connected)
       if (players[socket.id]) {
           socket.emit('currentPlayers', players);
           broadcastGameState();
@@ -306,7 +304,7 @@ io.on('connection', (socket) => {
         position: getRandomSpawn(),
         rotation: 0, animation: 'Idle', color: '#fff',
         role: initialRole, isDead: false, isDisconnected: false,
-        isAdmin: false
+        isAdmin: isPersistentAdmin
       };
       
       socket.emit('currentPlayers', players);
@@ -347,7 +345,34 @@ io.on('connection', (socket) => {
       }
   });
 
-  // --- COMMAND SYSTEM FIX ---
+  // --- ADMIN UI HANDLERS ---
+  socket.on('updateSettings', (newSettings: GameSettings) => {
+      if (players[socket.id]?.isAdmin) {
+          gameSettings = newSettings;
+          db.saveSettings(gameSettings);
+          io.emit('settingsUpdated', gameSettings);
+          broadcastGameState(); // Force update
+          sendSystemMessage("Game Settings Updated by Admin.");
+      }
+  });
+
+  socket.on('banPlayer', (targetUsername: string) => {
+      if (players[socket.id]?.isAdmin) {
+          const targetUser = db.findUserByUsername(targetUsername);
+          if (targetUser) {
+              db.addBan(targetUser.username);
+              broadcastBanMessage(targetUser.username, players[socket.id].username);
+              const targetSocketId = Object.keys(players).find(k => players[k].username.toLowerCase() === targetUsername.toLowerCase());
+              if (targetSocketId) {
+                  const targetSocket = io.sockets.sockets.get(targetSocketId);
+                  targetSocket?.emit('forceDisconnect', "You have been BANNED by an administrator.");
+                  targetSocket?.disconnect();
+              }
+          }
+      }
+  });
+
+  // --- COMMAND SYSTEM ---
   socket.on('chatMessage', (text) => {
       if(!text) return;
       const p = players[socket.id];
@@ -355,21 +380,17 @@ io.on('connection', (socket) => {
 
       const trimmedText = text.trim();
       
-      // 1. Check if it's a command
       if (trimmedText.startsWith('/')) {
           const parts = trimmedText.split(' ');
           const command = parts[0].toLowerCase();
           const arg1 = parts[1];
 
-          console.log(`[COMMAND] ${p.username} tried: ${command}`);
-
-          // --- PUBLIC COMMANDS ---
-
           // Login Admin
           if (command === '/adminpw') {
               if (arg1 === ADMIN_PASSWORD) {
                   p.isAdmin = true;
-                  sendSystemMessage("ACCESS GRANTED. You are now Admin.", socket.id);
+                  db.setAdminStatus(p.userId, true); // Save persistence
+                  sendSystemMessage("ACCESS GRANTED. You are now Admin (Saved).", socket.id);
                   socket.emit('toggleAdminPanel', true);
                   adminAttempts[p.userId] = 0; 
               } else {
@@ -384,55 +405,32 @@ io.on('connection', (socket) => {
                       sendSystemMessage(`ACCESS DENIED. Incorrect password. (${attempts}/3)`, socket.id, true);
                   }
               }
-              return; // Stop processing
+              return; 
           }
 
-          // --- ADMIN ONLY COMMANDS ---
           if (p.isAdmin) {
               if (command === '/ban') {
                   if (!arg1) { sendSystemMessage("Usage: /ban [username]", socket.id, true); return; }
-                  
-                  const targetUser = db.findUserByUsername(arg1);
-                  if (targetUser) {
-                      db.addBan(targetUser.username);
-                      broadcastBanMessage(targetUser.username, p.username);
-                      
-                      // Kick if online
-                      const targetSocketId = Object.keys(players).find(k => players[k].username.toLowerCase() === arg1.toLowerCase());
-                      if (targetSocketId) {
-                          const targetSocket = io.sockets.sockets.get(targetSocketId);
-                          if (targetSocket) {
-                              targetSocket.emit('forceDisconnect', "You have been BANNED by an administrator.");
-                              targetSocket.disconnect();
-                          }
-                      }
-                  } else {
-                      sendSystemMessage(`User '${arg1}' not found in database.`, socket.id, true);
-                  }
+                  socket.emit('toggleAdminPanel', true); // Open panel for easy management
                   return;
               }
-
               if (command === '/unban') {
                   if (!arg1) { sendSystemMessage("Usage: /unban [username]", socket.id, true); return; }
-
                   if (db.isBanned(arg1)) {
                       db.removeBan(arg1);
                       sendSystemMessage(`User '${arg1}' unbanned.`, socket.id);
-                      io.emit('chatMessage', { id: uuidv4(), sender: 'SERVER', text: `${arg1} has been unbanned by ${p.username}`, isSystem: true, timestamp: Date.now() });
                   } else {
                       sendSystemMessage(`User '${arg1}' is not banned.`, socket.id, true);
                   }
                   return;
               }
-
               if (command === '/location') {
                   socket.emit('toggleLocationDisplay', true);
-                  sendSystemMessage("Toggled location display.", socket.id);
                   return;
               }
-
               if (command === '/setlocation') {
-                  try {
+                   // Keep existing logic if needed, or point to UI
+                   try {
                       if (!arg1) throw new Error();
                       const coords = arg1.split(',');
                       if (coords.length === 3) {
@@ -441,48 +439,27 @@ io.on('connection', (socket) => {
                           const z = parseFloat(coords[2]);
                           if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
                               db.setSpawnCenter(x, y, z);
-                              sendSystemMessage(`Spawn center updated to ${x}, ${y}, ${z}`, socket.id);
-                          } else {
-                              throw new Error();
-                          }
-                      } else {
-                          throw new Error();
-                      }
-                  } catch (e) {
-                      sendSystemMessage("Invalid format. Use: /setlocation x,y,z", socket.id, true);
-                  }
+                              sendSystemMessage(`Spawn center updated.`, socket.id);
+                          } else throw new Error();
+                      } else throw new Error();
+                  } catch (e) { sendSystemMessage("Invalid. Use: /setlocation x,y,z", socket.id, true); }
                   return;
               }
-
               if (command === '/ainfo') {
                   socket.emit('toggleAdminPanel', true);
                   return;
               }
-              
-              // If admin types unknown command
-              sendSystemMessage(`Unknown Admin Command: ${command}`, socket.id, true);
-              return;
-
-          } else {
-              // If non-admin types unknown command or tries admin command
-              sendSystemMessage(`Unknown Command: ${command}`, socket.id, true);
-              return;
           }
+          return;
       }
 
-      // 2. Normal Chat
-      console.log(`[CHAT] ${p.username}: ${trimmedText.substring(0,50)}`);
       io.emit('chatMessage', { id: uuidv4(), sender: p.username, text: trimmedText.substring(0,50), isSystem: false, timestamp: Date.now() });
   });
 
   socket.on('leaveGame', () => {
       if (players[socket.id]) {
-          console.log(`[SERVER] Explicit Leave: ${players[socket.id].username}`);
           const name = players[socket.id].username;
-          
-          // STRICT: Delete immediately so reconnection logic (oldSid) fails next time
           delete players[socket.id];
-          
           io.emit('playerDisconnected', socket.id);
           sendSystemMessage(`${name} left.`);
           broadcastGameState();
@@ -490,16 +467,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    // Only mark disconnected if they are still in the players list (i.e. didn't explicitly leave)
     if (players[socket.id]) {
-        console.log(`[SERVER] Disconnect (Grace): ${players[socket.id].username}`);
         players[socket.id].isDisconnected = true;
         players[socket.id].disconnectTime = Date.now();
     }
   });
 });
 
-const distPath = path.join(__dirname, '../dist'); // Updated path for built artifacts
+const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
     app.use(express.static(distPath) as any);
     app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));

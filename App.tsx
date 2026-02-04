@@ -4,8 +4,9 @@ import { TouchLook } from './components/TouchLook';
 import { GameScene } from './components/GameScene';
 import { MainMenu } from './components/MainMenu';
 import { AuthScreen } from './components/AuthScreen';
+import { AdminPanel } from './components/AdminPanel';
 import { connectSocket, socket, disconnectSocket } from './services/socketService';
-import { JoystickData, PlayerState, GamePhase, GameStateData, Role, UserProfile, ChatMessage } from './types';
+import { JoystickData, PlayerState, GamePhase, GameStateData, Role, UserProfile, ChatMessage, GameSettings } from './types';
 
 // App Phases: AUTH (Portrait) -> MENU (Landscape) -> GAME (Landscape)
 type AppState = 'AUTH' | 'MENU' | 'GAME';
@@ -21,6 +22,10 @@ function App() {
   const [timer, setTimer] = useState<number>(0);
   const [survivors, setSurvivors] = useState<number>(0);
   
+  const [gameSettings, setGameSettings] = useState<GameSettings>({
+      hunterSpeed: 7, hiderSpeed: 6, hunterVisionRadius: 15, hunterVisionAngle: 0.8
+  });
+
   const [roleMessage, setRoleMessage] = useState<string | null>(null);
   const [spectatingIndex, setSpectatingIndex] = useState<number>(0);
   
@@ -35,6 +40,7 @@ function App() {
   // ADMIN STATE
   const [showCoords, setShowCoords] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [canKill, setCanKill] = useState(false); // UI State for kill button opacity
 
   const joystickRef = useRef<JoystickData>({ x: 0, y: 0 });
   const cameraRotationRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.5 });
@@ -68,6 +74,35 @@ function App() {
       setCurrentUser(user);
       setAppState('MENU');
   };
+
+  // --- KILL BUTTON PROXIMITY CHECK ---
+  useEffect(() => {
+    if (!isHunter || gamePhase !== GamePhase.IN_PROGRESS || !myPlayer) {
+        setCanKill(false);
+        return;
+    }
+
+    const KILL_DISTANCE = 3.0; // Must match server
+    const checkInterval = setInterval(() => {
+        let inRange = false;
+        const hiders = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead && !p.isDisconnected);
+        
+        for (const hider of hiders) {
+            const dx = myPlayer.position.x - hider.position.x;
+            const dy = myPlayer.position.y - hider.position.y;
+            const dz = myPlayer.position.z - hider.position.z;
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist <= KILL_DISTANCE) {
+                inRange = true;
+                break;
+            }
+        }
+        setCanKill(inRange);
+    }, 200);
+
+    return () => clearInterval(checkInterval);
+  }, [players, isHunter, gamePhase, myPlayer]);
+
 
   // --- CHAT FADE EFFECT ---
   useEffect(() => {
@@ -109,6 +144,7 @@ function App() {
         setGamePhase(data.phase);
         setTimer(data.timer);
         setSurvivors(data.survivors);
+        if(data.settings) setGameSettings(data.settings);
     };
 
     const onGameMessage = (msg: string) => {
@@ -131,13 +167,9 @@ function App() {
         if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     };
 
-    const onToggleLocationDisplay = (_show: boolean) => {
-        setShowCoords(prev => !prev); // Toggle
-    };
-
-    const onToggleAdminPanel = (_show: boolean) => {
-        setShowAdminPanel(true);
-    };
+    const onToggleLocationDisplay = (_show: boolean) => setShowCoords(prev => !prev);
+    const onToggleAdminPanel = (_show: boolean) => setShowAdminPanel(true);
+    const onSettingsUpdated = (newSettings: GameSettings) => setGameSettings(newSettings);
 
     socket.on('connect', onConnect);
     socket.on('forceDisconnect', onForceDisconnect);
@@ -151,6 +183,7 @@ function App() {
     socket.on('chatMessage', onChatMessage);
     socket.on('toggleLocationDisplay', onToggleLocationDisplay);
     socket.on('toggleAdminPanel', onToggleAdminPanel);
+    socket.on('settingsUpdated', onSettingsUpdated);
 
     return () => {
         socket.off('connect', onConnect);
@@ -165,6 +198,7 @@ function App() {
         socket.off('chatMessage', onChatMessage);
         socket.off('toggleLocationDisplay', onToggleLocationDisplay);
         socket.off('toggleAdminPanel', onToggleAdminPanel);
+        socket.off('settingsUpdated', onSettingsUpdated);
     };
   }, [appState, myId, players]); 
 
@@ -222,6 +256,9 @@ function App() {
       }
   };
 
+  const handleUpdateSettings = (s: GameSettings) => socket.emit('updateSettings', s);
+  const handleBanPlayer = (u: string) => socket.emit('banPlayer', u);
+
   const cycleSpectator = (dir: number) => {
       if (activePlayers.length === 0) return;
       let next = spectatingIndex + dir;
@@ -259,27 +296,19 @@ function App() {
                     spectatingId={isSpectator ? getSpectatingId() : null}
                     gamePhase={gamePhase}
                     showCoords={showCoords}
+                    settings={gameSettings}
                 />
             </div>
 
-            {/* ADMIN PANEL */}
+            {/* ADMIN PANEL COMPONENT */}
             {showAdminPanel && (
-                <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/50 pointer-events-auto">
-                    <div className="bg-slate-800 p-6 rounded-xl border border-blue-500/50 w-96 max-w-full shadow-2xl">
-                         <div className="flex justify-between items-center mb-4">
-                             <h2 className="text-xl font-bold text-blue-400">ADMINISTRATOR</h2>
-                             <button onClick={() => setShowAdminPanel(false)} className="text-gray-400 hover:text-white">✕</button>
-                         </div>
-                         <div className="space-y-2 text-sm text-gray-300 font-mono">
-                             <p><span className="text-yellow-400">/adminpw [code]</span> - Login</p>
-                             <p><span className="text-yellow-400">/ban [user]</span> - Ban player</p>
-                             <p><span className="text-yellow-400">/unban [user]</span> - Unban player</p>
-                             <p><span className="text-yellow-400">/location</span> - Toggle coords (Self)</p>
-                             <p><span className="text-yellow-400">/setlocation x,y,z</span> - Set Spawn</p>
-                             <p><span className="text-yellow-400">/ainfo</span> - This menu</p>
-                         </div>
-                    </div>
-                </div>
+                <AdminPanel 
+                    players={players} 
+                    settings={gameSettings} 
+                    onClose={() => setShowAdminPanel(false)}
+                    onUpdateSettings={handleUpdateSettings}
+                    onBanPlayer={handleBanPlayer}
+                />
             )}
 
             {roleMessage && (
@@ -415,19 +444,28 @@ function App() {
                      )}
                      {!isSpectator && gamePhase !== GamePhase.GAME_OVER && (
                         <div className="absolute bottom-4 right-4 z-40 pointer-events-auto flex flex-col items-end gap-4">
+                            {/* UPDATED SKULL KILL BUTTON */}
                             {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                                 <button
                                     onPointerDown={handleKill}
-                                    className="w-16 h-16 bg-red-600/60 hover:bg-red-600/80 rounded-full border-2 border-red-500/50 active:bg-red-500 active:scale-95 shadow-[0_0_15px_rgba(220,38,38,0.4)] flex items-center justify-center backdrop-blur-sm transition-all mb-2"
+                                    className={`
+                                        w-20 h-20 rounded-full border-2 shadow-[0_0_15px_rgba(255,0,0,0.5)] 
+                                        flex items-center justify-center backdrop-blur-sm transition-all mb-2
+                                        ${canKill ? 'bg-red-600 border-red-500 opacity-100 scale-110 animate-pulse' : 'bg-red-900/30 border-red-900/50 opacity-40 grayscale'}
+                                    `}
                                 >
-                                     <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                                    {/* Skull Icon */}
+                                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-white">
+                                        <path d="M12 2C7.58 2 4 5.58 4 10C4 12.03 4.67 13.93 5.86 15.5C5.86 15.5 5.86 15.5 5.86 15.5C5.86 15.5 7 19 7 19H17C17 19 18.14 15.5 18.14 15.5C19.33 13.93 20 12.03 20 10C20 5.58 16.42 2 12 2ZM9.5 9.5C9.5 8.67 10.17 8 11 8C11.83 8 12.5 8.67 12.5 9.5C12.5 10.33 11.83 11 11 11C10.17 11 9.5 10.33 9.5 9.5ZM13.5 15H10.5V14H13.5V15ZM14.5 9.5C14.5 10.33 13.83 11 13 11C12.17 11 11.5 10.33 11.5 9.5C11.5 8.67 12.17 8 13 8C13.83 8 14.5 8.67 14.5 9.5Z" />
+                                        <path d="M7 20H17V22H7V20Z" />
+                                    </svg>
                                 </button>
                             )}
                             <button
                                 onPointerDown={handleJump}
-                                className="w-20 h-20 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center backdrop-blur-sm transition-all"
+                                className="w-16 h-16 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 active:bg-blue-500 active:scale-95 shadow-lg flex items-center justify-center backdrop-blur-sm transition-all"
                             >
-                                <span className="font-bold text-white text-sm tracking-widest">JUMP</span>
+                                <span className="font-bold text-white text-xs tracking-widest">JUMP</span>
                             </button>
                         </div>
                      )}
