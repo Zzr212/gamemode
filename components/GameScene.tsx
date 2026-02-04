@@ -45,17 +45,17 @@ const TaskHologram: React.FC<{ type: string, position: Vector3 }> = ({ type, pos
 
     return (
         <group position={[position.x, position.y + 1.5, position.z]}>
-            <Html center distanceFactor={15}>
+            <Html center distanceFactor={15} zIndexRange={[100, 0]}>
                 <div className="flex flex-col items-center justify-center animate-bounce">
-                    <div className="text-4xl drop-shadow-[0_0_10px_rgba(255,255,0,0.8)]">
-                        {getIcon(type)}
+                    <div className="w-10 h-10 bg-yellow-500 rounded-full flex items-center justify-center border-2 border-white shadow-[0_0_15px_rgba(255,255,0,0.6)]">
+                         <span className="text-xl font-bold">{getIcon(type)}</span>
                     </div>
                 </div>
             </Html>
-            {/* Small ground marker */}
+            {/* Ground marker */}
             <mesh position={[0, -1.45, 0]} rotation={[-Math.PI/2, 0, 0]}>
                 <ringGeometry args={[0.3, 0.4, 16]} />
-                <meshBasicMaterial color="yellow" opacity={0.5} transparent />
+                <meshBasicMaterial color="yellow" opacity={0.6} transparent side={THREE.DoubleSide} />
             </mesh>
         </group>
     );
@@ -93,7 +93,7 @@ const RemotePlayer: React.FC<{ data: PlayerState }> = ({ data }) => {
   );
 };
 
-// --- CAMERA CONTROLLER (Updated for Cutscene) ---
+// --- CAMERA CONTROLLER ---
 const CameraController: React.FC<{
   targetPos: React.MutableRefObject<THREE.Vector3>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
@@ -110,35 +110,20 @@ const CameraController: React.FC<{
   useFrame((_, delta) => {
     const playerPos = targetPos.current;
 
-    // --- HUNTER CUTSCENE LOGIC ---
-    // Calculate elapsed time correctly. If timer is 299, elapsed is 1.
     const elapsed = roundDuration - timer;
-    
     if (isHunter && gamePhase === GamePhase.IN_PROGRESS && elapsed < headStartDuration) {
-        // Cutscene: From High Up (Birds Eye) down to Player
-        // progress: 0 (start) -> 1 (end of cutscene)
         const progress = Math.min(Math.max(elapsed / headStartDuration, 0), 1);
-        
-        // Start Position (Very High above player)
         const startCamPos = new THREE.Vector3(playerPos.x, playerPos.y + 25, playerPos.z + 10);
-        // End Position (Standard play view)
         const endCamPos = new THREE.Vector3(playerPos.x, playerPos.y + 4, playerPos.z + 6);
-        
-        // Use an easing function for smooth landing
-        // t*t*(3 - 2*t) is smoothstep
         const t = progress;
         const smoothT = t * t * (3 - 2 * t);
-
         const currentCamPos = new THREE.Vector3().lerpVectors(startCamPos, endCamPos, smoothT);
-        
         camera.position.copy(currentCamPos);
         camera.lookAt(playerPos);
-        // Force update internal currentPos so it doesn't snap when cutscene ends
         currentPos.current.copy(currentCamPos);
         return; 
     }
     
-    // --- NORMAL CAMERA ---
     if (currentPos.current.distanceTo(playerPos) > 10) currentPos.current.copy(playerPos).add(new THREE.Vector3(0, 5, 5));
     const maxDistance = 7;
     const minDistance = 2; 
@@ -165,7 +150,7 @@ const CameraController: React.FC<{
   return null;
 };
 
-// --- PLAYER CONTROLLER ---
+// --- PLAYER CONTROLLER (PHYSICS FIX) ---
 const PlayerController: React.FC<{
   joystickData: React.MutableRefObject<JoystickData>;
   cameraRotation: React.MutableRefObject<{ yaw: number; pitch: number }>;
@@ -195,6 +180,7 @@ const PlayerController: React.FC<{
   
   const GRAVITY = 18.0;   
   const JUMP_VELOCITY = 8.0; 
+  const MAX_STEP_HEIGHT = 0.5; // CRITICAL: Prevent climbing high walls
 
   // Sync position on reset
   useEffect(() => {
@@ -207,7 +193,6 @@ const PlayerController: React.FC<{
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
 
-    // --- HUNTER FREEZE ---
     let frozen = false;
     if (role === Role.HUNTER && gamePhase === GamePhase.IN_PROGRESS) {
         if ((settings.roundDuration - timer) < settings.headStartDuration) {
@@ -236,10 +221,11 @@ const PlayerController: React.FC<{
       }
     }
 
-    // Collision & Gravity
+    // Collision (Horizontal)
     let isBlocked = false;
     if (isMoving && mapObject) {
          const moveDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
+         // Cast from slight elevation to check walls
          const origin = pos.current.clone().add(new THREE.Vector3(0, 0.5, 0));
          wallRaycaster.current.set(origin, moveDir);
          wallRaycaster.current.far = 0.5;
@@ -247,12 +233,20 @@ const PlayerController: React.FC<{
     }
     if (!isBlocked) { pos.current.x += moveX; pos.current.z += moveZ; }
 
-    // Ground Check
+    // Ground Check (Gravity)
     let groundY = -100;
     if (mapObject) {
-        downRaycaster.current.set(pos.current.clone().add(new THREE.Vector3(0,2,0)), new THREE.Vector3(0,-1,0));
+        // Start raycast from above head
+        downRaycaster.current.set(pos.current.clone().add(new THREE.Vector3(0, 2.0, 0)), new THREE.Vector3(0,-1,0));
         const hits = downRaycaster.current.intersectObject(mapObject, true);
-        if (hits.length > 0 && hits[0].point.y > pos.current.y - 1.0) groundY = hits[0].point.y;
+        if (hits.length > 0) {
+            const hitY = hits[0].point.y;
+            // CRITICAL FIX: Only treat as ground if it's within "step height"
+            // If the hit point is WAY above us (like a roof), ignore it.
+            if (hitY < pos.current.y + MAX_STEP_HEIGHT) {
+                groundY = hitY;
+            }
+        }
     }
 
     if (!frozen && jumpPressed.current && isGrounded.current) {
@@ -261,6 +255,7 @@ const PlayerController: React.FC<{
         jumpPressed.current = false;
     } else jumpPressed.current = false;
 
+    // Apply Gravity
     if (pos.current.y > groundY + 0.1 || velocity.current.y > 0) {
         velocity.current.y -= GRAVITY * dt;
         pos.current.y += velocity.current.y * dt;
@@ -271,6 +266,7 @@ const PlayerController: React.FC<{
         isGrounded.current = true;
     }
     
+    // Safety Net
     if (pos.current.y < -20) pos.current.set((Math.random()*10)-5, 3, (Math.random()*10)-5);
 
     if (playerGroupRef.current) playerGroupRef.current.position.lerp(pos.current, 0.6);
@@ -321,7 +317,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
   const handlePlayerMove = useCallback((pos: Vector3, rot: number, anim: string) => { socket.emit('move', pos, rot, anim); }, []);
 
-  // Use default if roundDuration is missing (for older configs)
   const safeRoundDur = settings.roundDuration || 300;
   const safeHeadStart = settings.headStartDuration || 15;
 
@@ -333,7 +328,6 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
         {isHunter ? (
              <>
-                 {/* HUNTER VISION FIX: Increased ambient intensity to 0.5 so it's not pitch black inside radius */}
                  <fog attach="fog" args={['#000000', settings.hunterVisionRadius - 5, settings.hunterVisionRadius + 5]} />
                  <color attach="background" args={['#000000']} />
                  <ambientLight intensity={0.5} /> 

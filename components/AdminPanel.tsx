@@ -26,7 +26,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   return (
     <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center pointer-events-auto p-4">
-      <div className="w-full max-w-2xl bg-slate-800 rounded-xl border border-slate-600 shadow-2xl overflow-hidden flex flex-col md:flex-row h-[80vh]">
+      <div className="w-full max-w-3xl bg-slate-800 rounded-xl border border-slate-600 shadow-2xl overflow-hidden flex flex-col md:flex-row h-[80vh]">
         
         {/* SIDEBAR */}
         <div className="w-full md:w-48 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-700 p-4 flex flex-col gap-2">
@@ -64,28 +64,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             {activeTab === 'TASKS' && (
                 <div className="space-y-6">
                     <h3 className="text-lg font-bold text-white">TASK SPAWNER</h3>
-                    <p className="text-xs text-gray-400">Click a button to place a task spawn at your current location.</p>
+                    <div className="bg-slate-700/50 p-3 rounded text-xs text-gray-300 border border-slate-600">
+                        Current Position: <span className="text-green-400 font-mono">X:{myPosition.x.toFixed(1)}, Y:{myPosition.y.toFixed(1)}, Z:{myPosition.z.toFixed(1)}</span>
+                    </div>
                     
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {Object.values(TaskType).map(type => (
-                            <button 
-                                key={type}
-                                onClick={() => onAddTaskSpawn(type, myPosition)}
-                                className="bg-slate-700 hover:bg-blue-600 text-white text-xs font-bold py-2 px-3 rounded border border-slate-600"
-                            >
-                                + {type}
-                            </button>
+                            <div key={type} className="flex items-center justify-between bg-slate-900 p-3 rounded border border-slate-700">
+                                <span className="text-white text-xs font-bold">{type}</span>
+                                <button 
+                                    onClick={() => onAddTaskSpawn(type, myPosition)}
+                                    className="bg-green-600 hover:bg-green-500 text-white text-xs font-bold py-1 px-3 rounded shadow"
+                                >
+                                    ADD HERE
+                                </button>
+                            </div>
                         ))}
                     </div>
 
-                    <h3 className="text-lg font-bold text-white mt-4">EXISTING SPAWNS</h3>
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                    <h3 className="text-lg font-bold text-white mt-4">EXISTING SPAWNS ({taskSpawns.length})</h3>
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
                         {taskSpawns.map(t => (
-                            <div key={t.id} className="flex justify-between items-center bg-black/20 p-2 rounded text-xs text-gray-300">
-                                <span>{t.type} <span className="text-gray-500">({t.position.x.toFixed(1)}, {t.position.z.toFixed(1)})</span></span>
-                                <button onClick={() => onRemoveTaskSpawn(t.id)} className="text-red-500 hover:text-white font-bold px-2">X</button>
+                            <div key={t.id} className="flex justify-between items-center bg-black/30 p-2 rounded text-xs text-gray-300 border border-white/5">
+                                <span>{t.type} <span className="text-gray-500 font-mono">({t.position.x.toFixed(0)}, {t.position.z.toFixed(0)})</span></span>
+                                <button onClick={() => onRemoveTaskSpawn(t.id)} className="bg-red-900/50 text-red-400 hover:bg-red-600 hover:text-white px-2 py-1 rounded">DEL</button>
                             </div>
                         ))}
+                        {taskSpawns.length === 0 && <div className="text-gray-500 italic text-sm">No tasks added yet.</div>}
                     </div>
                 </div>
             )}
