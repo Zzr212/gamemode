@@ -2,32 +2,33 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
-import { GameSettings } from '../types.js';
+import { GameSettings, TaskLocation, TaskType, Vector3 } from '../types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure data directory exists
 const DATA_DIR = path.join(__dirname, '../data');
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR);
-}
+if (!fs.existsSync(DATA_DIR)) { fs.mkdirSync(DATA_DIR); }
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const BANNED_FILE = path.join(DATA_DIR, 'banned.json');
 const SPAWN_FILE = path.join(DATA_DIR, 'spawn.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 
-// Initialize files if not exist
+// Init files
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify({ users: [] }, null, 2));
 if (!fs.existsSync(BANNED_FILE)) fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: [] }, null, 2));
 if (!fs.existsSync(SPAWN_FILE)) fs.writeFileSync(SPAWN_FILE, JSON.stringify({ center: { x: 0, y: 3, z: 0 } }, null, 2));
+if (!fs.existsSync(TASKS_FILE)) fs.writeFileSync(TASKS_FILE, JSON.stringify({ tasks: [] }, null, 2));
 
 const DEFAULT_SETTINGS: GameSettings = {
     hunterSpeed: 7.0,
     hiderSpeed: 6.0,
-    hunterVisionRadius: 15,
-    hunterVisionAngle: 0.8
+    hunterVisionRadius: 10,
+    hunterVisionAngle: 0.8,
+    roundDuration: 300,
+    headStartDuration: 15
 };
 
 if (!fs.existsSync(SETTINGS_FILE)) fs.writeFileSync(SETTINGS_FILE, JSON.stringify(DEFAULT_SETTINGS, null, 2));
@@ -47,13 +48,8 @@ export const db = {
 
     saveUser: (user: UserRecord) => {
         const users = db.getUsers();
-        // Check if updating existing
         const index = users.findIndex(u => u.id === user.id);
-        if (index >= 0) {
-            users[index] = user;
-        } else {
-            users.push(user);
-        }
+        if (index >= 0) users[index] = user; else users.push(user);
         fs.writeFileSync(USERS_FILE, JSON.stringify({ users }, null, 2));
     },
 
@@ -74,15 +70,9 @@ export const db = {
     },
 
     createUser: (username: string, email: string, password: string) => {
-        const newUser: UserRecord = {
-            id: uuidv4(),
-            username,
-            email,
-            password,
-            isAdmin: false
-        };
+        const newUser: UserRecord = { id: uuidv4(), username, email, password, isAdmin: false };
         db.saveUser(newUser);
-        return { id: newUser.id, username: newUser.username, email: newUser.email, isAdmin: false };
+        return newUser;
     },
     
     validateLogin: (username: string, password: string) => {
@@ -93,11 +83,9 @@ export const db = {
         return null;
     },
 
-    // --- BAN SYSTEM ---
-    getBanned: (): string[] => { // Returns usernames
+    getBanned: (): string[] => { 
         try { return JSON.parse(fs.readFileSync(BANNED_FILE, 'utf-8')).banned; } catch (e) { return []; }
     },
-
     addBan: (username: string) => {
         const list = db.getBanned();
         if (!list.includes(username.toLowerCase())) {
@@ -105,35 +93,43 @@ export const db = {
             fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: list }, null, 2));
         }
     },
-
     removeBan: (username: string) => {
         let list = db.getBanned();
         list = list.filter(u => u !== username.toLowerCase());
         fs.writeFileSync(BANNED_FILE, JSON.stringify({ banned: list }, null, 2));
     },
+    isBanned: (username: string) => db.getBanned().includes(username.toLowerCase()),
 
-    isBanned: (username: string) => {
-        const list = db.getBanned();
-        return list.includes(username.toLowerCase());
-    },
-
-    // --- SPAWN SYSTEM ---
     getSpawnCenter: () => {
         try { return JSON.parse(fs.readFileSync(SPAWN_FILE, 'utf-8')).center; } 
         catch (e) { return { x: 0, y: 3, z: 0 }; }
     },
-
     setSpawnCenter: (x: number, y: number, z: number) => {
         fs.writeFileSync(SPAWN_FILE, JSON.stringify({ center: { x, y, z } }, null, 2));
     },
 
-    // --- GAME SETTINGS ---
     getSettings: (): GameSettings => {
         try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8')); }
         catch (e) { return DEFAULT_SETTINGS; }
     },
-
     saveSettings: (settings: GameSettings) => {
         fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    },
+
+    // --- TASK SYSTEM ---
+    getTaskSpawns: (): TaskLocation[] => {
+        try { return JSON.parse(fs.readFileSync(TASKS_FILE, 'utf-8')).tasks; } catch (e) { return []; }
+    },
+    addTaskSpawn: (type: TaskType, position: Vector3) => {
+        const tasks = db.getTaskSpawns();
+        const newTask: TaskLocation = { id: uuidv4(), type, position };
+        tasks.push(newTask);
+        fs.writeFileSync(TASKS_FILE, JSON.stringify({ tasks }, null, 2));
+        return newTask;
+    },
+    removeTaskSpawn: (spawnId: string) => {
+        let tasks = db.getTaskSpawns();
+        tasks = tasks.filter(t => t.id !== spawnId);
+        fs.writeFileSync(TASKS_FILE, JSON.stringify({ tasks }, null, 2));
     }
 };

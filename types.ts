@@ -20,18 +20,41 @@ export enum Role {
   SPECTATOR = 'SPECTATOR'
 }
 
+export enum TaskType {
+  WIRES = 'Fix Wires',
+  DOWNLOAD = 'Download Data',
+  ANTENNA = 'Repair Antenna',
+  REFUEL = 'Refuel Engine',
+  UNLOCK = 'Unlock Manifold',
+  SHIELDS = 'Prime Shields'
+}
+
+export interface TaskLocation {
+  id: string;
+  type: TaskType;
+  position: Vector3;
+}
+
+export interface PlayerTask {
+  id: string; // Unique instance ID
+  type: TaskType;
+  locationId: string;
+  position: Vector3;
+  completed: boolean;
+}
+
 export interface UserProfile {
   id: string;
   username: string;
   email: string;
-  isAdmin?: boolean; // Persistent Admin Flag
+  isAdmin?: boolean; 
 }
 
 export interface PlayerState {
-  id: string; // Socket ID (temporary session)
-  userId: string; // Persistent Account ID
+  id: string; 
+  userId: string; 
   username: string;
-  deviceId: string; // Persistent Device ID (fallback)
+  deviceId: string; 
   position: Vector3;
   rotation: number;
   animation: string;
@@ -41,20 +64,24 @@ export interface PlayerState {
   isAdmin?: boolean; 
   isDisconnected: boolean;
   disconnectTime?: number;
+  tasks: PlayerTask[]; // Assigned tasks
 }
 
 export interface GameSettings {
   hunterSpeed: number;
   hiderSpeed: number;
-  hunterVisionRadius: number; // Distance of the light
-  hunterVisionAngle: number; // Width of the cone (if using cone) or general intensity
+  hunterVisionRadius: number; 
+  hunterVisionAngle: number;
+  roundDuration: number; // Seconds
+  headStartDuration: number; // Seconds (Hunter freeze time)
 }
 
 export interface GameStateData {
   phase: GamePhase;
-  timer: number; // seconds
-  survivors: number; // Active hiders count
-  settings: GameSettings; // Sync settings to client
+  timer: number; 
+  survivors: number; 
+  settings: GameSettings;
+  taskSpawns: TaskLocation[]; // For Admin visualization
 }
 
 export interface ChatMessage {
@@ -76,27 +103,29 @@ export interface ServerToClientEvents {
   gameMessage: (msg: string) => void; 
   chatMessage: (msg: ChatMessage) => void;
   forceDisconnect: (reason: string) => void; 
-  // Admin events
   toggleLocationDisplay: (show: boolean) => void;
   toggleAdminPanel: (show: boolean) => void;
   settingsUpdated: (settings: GameSettings) => void;
+  taskCompleted: (playerId: string, taskId: string) => void;
 }
 
 export interface ClientToServerEvents {
   move: (position: Vector3, rotation: number, animation: string) => void;
-  pingSync: (callback: () => void) => void;
   requestGameStart: () => void; 
   attemptKill: () => void; 
   chatMessage: (text: string) => void; 
   leaveGame: () => void; 
-  // Admin
   updateSettings: (settings: GameSettings) => void;
   banPlayer: (username: string) => void;
+  // Task Logic
+  completeTask: (taskId: string) => void;
+  addTaskSpawn: (type: TaskType, position: Vector3) => void;
+  removeTaskSpawn: (spawnId: string) => void;
 }
 
 export interface JoystickData {
-  x: number; // -1 to 1
-  y: number; // -1 to 1
+  x: number; 
+  y: number; 
 }
 
 // React Three Fiber JSX elements augmentation

@@ -1,18 +1,23 @@
 import React, { useState } from 'react';
-import { GameSettings, PlayerState } from '../types';
+import { GameSettings, PlayerState, TaskType, Vector3, TaskLocation } from '../types';
 
 interface AdminPanelProps {
   players: Record<string, PlayerState>;
   settings: GameSettings;
+  taskSpawns: TaskLocation[];
+  myPosition: Vector3;
   onClose: () => void;
   onUpdateSettings: (s: GameSettings) => void;
   onBanPlayer: (username: string) => void;
+  onAddTaskSpawn: (type: TaskType, pos: Vector3) => void;
+  onRemoveTaskSpawn: (id: string) => void;
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ players, settings, onClose, onUpdateSettings, onBanPlayer }) => {
-  const [activeTab, setActiveTab] = useState<'PLAYERS' | 'SETTINGS' | 'VISION'>('PLAYERS');
-  
-  // Local state for sliders to avoid too many socket emits on drag
+export const AdminPanel: React.FC<AdminPanelProps> = ({ 
+    players, settings, taskSpawns, myPosition, onClose, 
+    onUpdateSettings, onBanPlayer, onAddTaskSpawn, onRemoveTaskSpawn 
+}) => {
+  const [activeTab, setActiveTab] = useState<'PLAYERS' | 'SETTINGS' | 'VISION' | 'TASKS'>('PLAYERS');
   const [localSettings, setLocalSettings] = useState<GameSettings>(settings);
 
   const handleSaveSettings = () => {
@@ -27,29 +32,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ players, settings, onClo
         <div className="w-full md:w-48 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-700 p-4 flex flex-col gap-2">
             <h2 className="text-xl font-black text-blue-400 mb-4 tracking-tighter">ADMIN</h2>
             
-            <button 
-                onClick={() => setActiveTab('PLAYERS')}
-                className={`text-left px-4 py-3 rounded-lg text-sm font-bold transition-all ${activeTab === 'PLAYERS' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-            >
-                PLAYERS LIST
-            </button>
-            <button 
-                onClick={() => setActiveTab('SETTINGS')}
-                className={`text-left px-4 py-3 rounded-lg text-sm font-bold transition-all ${activeTab === 'SETTINGS' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-            >
-                GAMEPLAY
-            </button>
-            <button 
-                onClick={() => setActiveTab('VISION')}
-                className={`text-left px-4 py-3 rounded-lg text-sm font-bold transition-all ${activeTab === 'VISION' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-            >
-                VISION
-            </button>
+            <button onClick={() => setActiveTab('PLAYERS')} className={`admin-tab-btn ${activeTab === 'PLAYERS' ? 'active' : ''}`}>PLAYERS</button>
+            <button onClick={() => setActiveTab('TASKS')} className={`admin-tab-btn ${activeTab === 'TASKS' ? 'active' : ''}`}>TASKS</button>
+            <button onClick={() => setActiveTab('SETTINGS')} className={`admin-tab-btn ${activeTab === 'SETTINGS' ? 'active' : ''}`}>SETTINGS</button>
+            <button onClick={() => setActiveTab('VISION')} className={`admin-tab-btn ${activeTab === 'VISION' ? 'active' : ''}`}>VISION</button>
 
             <div className="flex-1" />
-            <button onClick={onClose} className="text-left px-4 py-3 rounded-lg text-sm font-bold text-red-400 hover:bg-red-900/30">
-                CLOSE PANEL
-            </button>
+            <button onClick={onClose} className="text-left px-4 py-3 rounded-lg text-sm font-bold text-red-400 hover:bg-red-900/30">CLOSE</button>
         </div>
 
         {/* CONTENT */}
@@ -63,18 +52,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ players, settings, onClo
                             <div key={p.id} className="flex items-center justify-between bg-slate-700/50 p-3 rounded-lg border border-slate-600">
                                 <div>
                                     <div className="text-white font-bold text-sm">{p.username}</div>
-                                    <div className="text-xs text-slate-400">{p.role} • {p.isAdmin ? 'ADMIN' : 'PLAYER'}</div>
+                                    <div className="text-xs text-slate-400">{p.role} {p.isAdmin && '• ADMIN'}</div>
                                 </div>
-                                {!p.isAdmin && (
-                                    <button 
-                                        onClick={() => {
-                                            if(confirm(`Ban ${p.username}?`)) onBanPlayer(p.username);
-                                        }}
-                                        className="bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white px-3 py-1 rounded text-xs font-bold transition-colors"
-                                    >
-                                        BAN
-                                    </button>
-                                )}
+                                {!p.isAdmin && <button onClick={() => { if(confirm(`Ban ${p.username}?`)) onBanPlayer(p.username); }} className="bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white px-3 py-1 rounded text-xs font-bold">BAN</button>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'TASKS' && (
+                <div className="space-y-6">
+                    <h3 className="text-lg font-bold text-white">TASK SPAWNER</h3>
+                    <p className="text-xs text-gray-400">Click a button to place a task spawn at your current location.</p>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                        {Object.values(TaskType).map(type => (
+                            <button 
+                                key={type}
+                                onClick={() => onAddTaskSpawn(type, myPosition)}
+                                className="bg-slate-700 hover:bg-blue-600 text-white text-xs font-bold py-2 px-3 rounded border border-slate-600"
+                            >
+                                + {type}
+                            </button>
+                        ))}
+                    </div>
+
+                    <h3 className="text-lg font-bold text-white mt-4">EXISTING SPAWNS</h3>
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {taskSpawns.map(t => (
+                            <div key={t.id} className="flex justify-between items-center bg-black/20 p-2 rounded text-xs text-gray-300">
+                                <span>{t.type} <span className="text-gray-500">({t.position.x.toFixed(1)}, {t.position.z.toFixed(1)})</span></span>
+                                <button onClick={() => onRemoveTaskSpawn(t.id)} className="text-red-500 hover:text-white font-bold px-2">X</button>
                             </div>
                         ))}
                     </div>
@@ -83,19 +92,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ players, settings, onClo
 
             {activeTab === 'SETTINGS' && (
                 <div className="space-y-6">
-                    <h3 className="text-lg font-bold text-white mb-4">MOVEMENT SPEEDS</h3>
+                    <h3 className="text-lg font-bold text-white mb-4">GAMEPLAY SETTINGS</h3>
                     
+                    {/* Round Duration */}
+                    <div>
+                        <div className="flex justify-between text-xs font-bold text-slate-400 mb-2">
+                            <span>ROUND DURATION (Seconds)</span>
+                            <span className="text-blue-400">{localSettings.roundDuration}s</span>
+                        </div>
+                        <input type="range" min="60" max="600" step="30" value={localSettings.roundDuration} onChange={(e) => setLocalSettings({...localSettings, roundDuration: parseInt(e.target.value)})} className="w-full accent-blue-500" />
+                    </div>
+
                     <div>
                         <div className="flex justify-between text-xs font-bold text-slate-400 mb-2">
                             <span>HUNTER SPEED</span>
                             <span className="text-blue-400">{localSettings.hunterSpeed.toFixed(1)}</span>
                         </div>
-                        <input 
-                            type="range" min="3" max="15" step="0.5"
-                            value={localSettings.hunterSpeed}
-                            onChange={(e) => setLocalSettings({...localSettings, hunterSpeed: parseFloat(e.target.value)})}
-                            className="w-full accent-blue-500"
-                        />
+                        <input type="range" min="3" max="15" step="0.5" value={localSettings.hunterSpeed} onChange={(e) => setLocalSettings({...localSettings, hunterSpeed: parseFloat(e.target.value)})} className="w-full accent-blue-500" />
                     </div>
 
                     <div>
@@ -103,54 +116,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ players, settings, onClo
                             <span>HIDER SPEED</span>
                             <span className="text-green-400">{localSettings.hiderSpeed.toFixed(1)}</span>
                         </div>
-                        <input 
-                            type="range" min="3" max="15" step="0.5"
-                            value={localSettings.hiderSpeed}
-                            onChange={(e) => setLocalSettings({...localSettings, hiderSpeed: parseFloat(e.target.value)})}
-                            className="w-full accent-green-500"
-                        />
+                        <input type="range" min="3" max="15" step="0.5" value={localSettings.hiderSpeed} onChange={(e) => setLocalSettings({...localSettings, hiderSpeed: parseFloat(e.target.value)})} className="w-full accent-green-500" />
                     </div>
 
-                    <button 
-                        onClick={handleSaveSettings} 
-                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg active:scale-95 transition-transform"
-                    >
-                        APPLY CHANGES
-                    </button>
+                    <button onClick={handleSaveSettings} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg">APPLY CHANGES</button>
                 </div>
             )}
 
             {activeTab === 'VISION' && (
                 <div className="space-y-6">
-                    <h3 className="text-lg font-bold text-white mb-4">HUNTER VISION CONFIG</h3>
-                    <p className="text-xs text-slate-400 mb-4 bg-slate-900/50 p-2 rounded">
-                        Adjust how the Fog of War behaves for the Hunter.
-                    </p>
-
+                    <h3 className="text-lg font-bold text-white mb-4">HUNTER VISION</h3>
                     <div>
                         <div className="flex justify-between text-xs font-bold text-slate-400 mb-2">
-                            <span>VISION RADIUS (Spotlight Range)</span>
+                            <span>VISION RADIUS (Spotlight)</span>
                             <span className="text-yellow-400">{localSettings.hunterVisionRadius}</span>
                         </div>
-                        <input 
-                            type="range" min="5" max="40" step="1"
-                            value={localSettings.hunterVisionRadius}
-                            onChange={(e) => setLocalSettings({...localSettings, hunterVisionRadius: parseFloat(e.target.value)})}
-                            className="w-full accent-yellow-500"
-                        />
+                        <input type="range" min="5" max="40" step="1" value={localSettings.hunterVisionRadius} onChange={(e) => setLocalSettings({...localSettings, hunterVisionRadius: parseFloat(e.target.value)})} className="w-full accent-yellow-500" />
                     </div>
-
-                    <button 
-                        onClick={handleSaveSettings} 
-                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg active:scale-95 transition-transform"
-                    >
-                        APPLY CHANGES
-                    </button>
+                    <button onClick={handleSaveSettings} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg">APPLY CHANGES</button>
                 </div>
             )}
 
         </div>
       </div>
+      <style>{`
+        .admin-tab-btn { @apply text-left px-4 py-3 rounded-lg text-sm font-bold transition-all text-slate-400 hover:bg-slate-800 hover:text-white; }
+        .admin-tab-btn.active { @apply bg-blue-600 text-white shadow-lg; }
+      `}</style>
     </div>
   );
 };

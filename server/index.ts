@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { PlayerState, GamePhase, Role, GameSettings } from '../types.js';
+import { PlayerState, GamePhase, Role, GameSettings, TaskType, PlayerTask, TaskLocation, Vector3 } from '../types.js';
 import { db } from './db.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -16,48 +16,38 @@ app.use(express.json() as any);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: {
-    origin: "*", 
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 } as any);
 
 const PORT = process.env.PORT || 3000;
 
-// --- AUTH API ROUTES ---
+// --- AUTH ---
 app.post('/api/register', (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
     if (db.findUserByUsername(username)) return res.status(400).json({ error: 'Username already taken' });
-    
-    if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED from this server.' });
-
+    if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED.' });
     const user = db.createUser(username, email, password);
-    console.log(`[AUTH] New user registered: ${username}`);
     res.json({ success: true, user });
 });
 
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
-    
-    if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED from this server.' });
-
+    if (db.isBanned(username)) return res.status(403).json({ error: 'You are BANNED.' });
     const user = db.validateLogin(username, password);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    
-    console.log(`[AUTH] User logged in: ${username} (Admin: ${user.isAdmin})`);
     res.json({ success: true, user });
 });
 
-// --- GAME STATE ---
+// --- STATE ---
 let players: Record<string, PlayerState> = {};
 let gamePhase: GamePhase = GamePhase.WAITING;
 let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
 const adminAttempts: Record<string, number> = {}; 
 let gameSettings: GameSettings = db.getSettings();
+let taskSpawns: TaskLocation[] = db.getTaskSpawns();
 
-const ROUND_TIME = 300; 
 const COUNTDOWN_TIME = 10;
 const GAME_OVER_TIME = 4;
 const KILL_DISTANCE = 3.0;
@@ -66,53 +56,27 @@ const ADMIN_PASSWORD = "2702";
 
 const getRandomSpawn = () => {
     const center = db.getSpawnCenter();
-    return { 
-        x: center.x + (Math.random() * 10) - 5, 
-        y: center.y, 
-        z: center.z + (Math.random() * 10) - 5 
-    };
+    return { x: center.x + (Math.random() * 10) - 5, y: center.y, z: center.z + (Math.random() * 10) - 5 };
 };
 
 const sendSystemMessage = (text: string, socketId?: string, isError: boolean = false) => {
-    const msg = { 
-        id: uuidv4(), 
-        sender: isError ? 'ERROR' : 'SYSTEM', 
-        text: text, 
-        isSystem: true, 
-        timestamp: Date.now() 
-    };
-    if (socketId) {
-        io.to(socketId).emit('chatMessage', msg);
-    } else {
-        io.emit('chatMessage', msg);
-    }
+    const msg = { id: uuidv4(), sender: isError ? 'ERROR' : 'SYSTEM', text: text, isSystem: true, timestamp: Date.now() };
+    if (socketId) io.to(socketId).emit('chatMessage', msg); else io.emit('chatMessage', msg);
 };
 
 const broadcastBanMessage = (username: string, byAdmin: string | null = null) => {
-    const text = byAdmin 
-        ? `${username} has been BANNED by ${byAdmin}.` 
-        : `${username} has been BANNED by server.`;
-    
-    io.emit('chatMessage', { 
-        id: uuidv4(), 
-        sender: 'SERVER', 
-        text: text.toUpperCase(), 
-        isSystem: true, 
-        timestamp: Date.now() 
-    });
+    const text = byAdmin ? `${username} has been BANNED by ${byAdmin}.` : `${username} has been BANNED by server.`;
+    io.emit('chatMessage', { id: uuidv4(), sender: 'SERVER', text: text.toUpperCase(), isSystem: true, timestamp: Date.now() });
 };
 
-// --- GAME LOOP ---
+// --- LOOP ---
 setInterval(() => {
     const now = Date.now();
     let changed = false;
-    
-    // Cleanup AFK
     Object.keys(players).forEach(id => {
         const p = players[id];
         if (p.isDisconnected && p.disconnectTime) {
             if (now - p.disconnectTime > AFK_TIMEOUT) {
-                console.log(`[SERVER] AFK Removal: ${p.username}`);
                 delete players[id];
                 io.emit('playerDisconnected', id);
                 sendSystemMessage(`${p.username} removed (AFK)`);
@@ -120,7 +84,6 @@ setInterval(() => {
             }
         }
     });
-
     if (changed) broadcastGameState();
 }, 5000);
 
@@ -128,10 +91,8 @@ setInterval(() => {
   const activePlayers = Object.keys(players).filter(id => !players[id].isDisconnected && players[id].role !== Role.SPECTATOR);
   const activeCount = activePlayers.length;
 
-  // Phase Logic
   if (gamePhase === GamePhase.WAITING) {
     if (activeCount >= 2) {
-      console.log(`[SERVER] Countdown Started.`);
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
       broadcastGameState();
@@ -140,7 +101,6 @@ setInterval(() => {
   else if (gamePhase === GamePhase.COUNTDOWN) {
     gameTimer--;
     if (activeCount < 2) {
-        console.log(`[SERVER] Countdown Aborted.`);
         gamePhase = GamePhase.WAITING;
         gameTimer = 0;
         broadcastGameState();
@@ -162,6 +122,7 @@ setInterval(() => {
     else if (hunters.length === 0) reason = "HIDERS WIN (Hunter Disconnected)";
     else if (hiders.length === 0) reason = "HUNTER WINS";
     else if (gameTimer <= 0) reason = "HIDERS WIN (Time Limit)";
+    // Note: Can add task win condition here if desired
 
     if (reason) endGame(reason);
     else broadcastGameState();
@@ -182,14 +143,42 @@ function broadcastGameState() {
         phase: gamePhase, 
         timer: gameTimer, 
         survivors: survivors,
-        settings: gameSettings 
+        settings: gameSettings,
+        taskSpawns: taskSpawns
+    });
+}
+
+function assignTasksToHiders(hiders: string[]) {
+    const availableTaskTypes = Object.values(TaskType);
+    
+    hiders.forEach(id => {
+        players[id].tasks = [];
+        // Select 4 unique random task types
+        const shuffled = [...availableTaskTypes].sort(() => 0.5 - Math.random());
+        const selectedTypes = shuffled.slice(0, 4);
+
+        selectedTypes.forEach(type => {
+            // Find spawns for this type
+            const spawns = taskSpawns.filter(t => t.type === type);
+            if (spawns.length > 0) {
+                // Pick a random spawn point for this task type
+                const spawn = spawns[Math.floor(Math.random() * spawns.length)];
+                players[id].tasks.push({
+                    id: uuidv4(),
+                    type: type,
+                    locationId: spawn.id,
+                    position: spawn.position,
+                    completed: false
+                });
+            }
+        });
     });
 }
 
 function startGame() {
     console.log(`[SERVER] Game Start.`);
     gamePhase = GamePhase.IN_PROGRESS;
-    gameTimer = ROUND_TIME;
+    gameTimer = gameSettings.roundDuration || 300;
     sendSystemMessage("Game Started!");
 
     const ids = Object.keys(players);
@@ -198,6 +187,7 @@ function startGame() {
         players[id].role = Role.HIDER;
         players[id].position = getRandomSpawn();
         players[id].isDisconnected = false;
+        players[id].tasks = [];
     });
 
     let candidates = ids;
@@ -213,12 +203,15 @@ function startGame() {
         console.log(`[SERVER] Hunter: ${players[rid].username}`);
     }
 
+    // Assign tasks to everyone who is HIDER
+    const hiders = ids.filter(id => players[id].role === Role.HIDER);
+    assignTasksToHiders(hiders);
+
     io.emit('currentPlayers', players);
     broadcastGameState();
 }
 
 function resetGameRound() {
-    console.log("[SERVER] Resetting Round.");
     if (Object.keys(players).length >= 2) {
       gamePhase = GamePhase.COUNTDOWN;
       gameTimer = COUNTDOWN_TIME;
@@ -231,13 +224,13 @@ function resetGameRound() {
         players[id].role = Role.HIDER;
         players[id].position = getRandomSpawn();
         players[id].animation = 'Idle';
+        players[id].tasks = [];
     });
     io.emit('currentPlayers', players);
     broadcastGameState();
 }
 
 function endGame(reason: string) {
-    console.log(`[SERVER] End Game: ${reason}`);
     io.emit('gameMessage', reason);
     sendSystemMessage(`Round Over: ${reason}`);
     gamePhase = GamePhase.GAME_OVER;
@@ -245,78 +238,64 @@ function endGame(reason: string) {
     broadcastGameState();
 }
 
-// --- SOCKET HANDLERS ---
-
+// --- SOCKETS ---
 io.on('connection', (socket) => {
   const deviceId = socket.handshake.auth.deviceId as string;
   const userId = socket.handshake.auth.userId as string;
   const username = (socket.handshake.auth.username as string) || 'Guest';
 
   if (!userId) { socket.disconnect(); return; }
-  
-  if (db.isBanned(username)) {
-      socket.emit('forceDisconnect', "You are BANNED.");
-      socket.disconnect();
-      return;
-  }
+  if (db.isBanned(username)) { socket.emit('forceDisconnect', "You are BANNED."); socket.disconnect(); return; }
 
-  // Check DB for persistent admin status
   const userRecord = db.findUserByUsername(username);
   const isPersistentAdmin = userRecord?.isAdmin || false;
 
-  // --- GHOST FIX START ---
   const oldSid = Object.keys(players).find(id => players[id].userId === userId);
-  
   if (oldSid) {
-      console.log(`[SERVER] Reconnect Detected: ${username}`);
       const recoveredPlayer = { ...players[oldSid] };
       io.emit('playerDisconnected', oldSid);
       delete players[oldSid]; 
       const oldSocket = io.sockets.sockets.get(oldSid);
       if (oldSocket) oldSocket.disconnect(true);
-      
       recoveredPlayer.id = socket.id;
       recoveredPlayer.isDisconnected = false;
-      recoveredPlayer.isAdmin = isPersistentAdmin; // Ensure admin sync
+      recoveredPlayer.isAdmin = isPersistentAdmin;
       players[socket.id] = recoveredPlayer; 
-      
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', recoveredPlayer);
       sendSystemMessage(`${username} reconnected.`);
   } 
-  // --- GHOST FIX END ---
-  
-  socket.on('requestGameStart', () => {
-      if (players[socket.id]) {
-          socket.emit('currentPlayers', players);
-          broadcastGameState();
-          return;
-      }
-      
-      let initialRole = Role.SPECTATOR;
-      if (gamePhase === GamePhase.WAITING || gamePhase === GamePhase.COUNTDOWN) {
-          initialRole = Role.HIDER;
-      }
 
+  socket.on('requestGameStart', () => {
+      if (players[socket.id]) { socket.emit('currentPlayers', players); broadcastGameState(); return; }
+      let initialRole = Role.SPECTATOR;
+      if (gamePhase === GamePhase.WAITING || gamePhase === GamePhase.COUNTDOWN) initialRole = Role.HIDER;
       players[socket.id] = {
         id: socket.id,
         userId, username, deviceId,
         position: getRandomSpawn(),
         rotation: 0, animation: 'Idle', color: '#fff',
         role: initialRole, isDead: false, isDisconnected: false,
-        isAdmin: isPersistentAdmin
+        isAdmin: isPersistentAdmin,
+        tasks: []
       };
-      
       socket.emit('currentPlayers', players);
       socket.broadcast.emit('newPlayer', players[socket.id]);
       sendSystemMessage(`${username} joined.`);
-      console.log(`[SERVER] Join: ${username}`);
       broadcastGameState();
   });
 
   socket.on('move', (pos, rot, anim) => {
     const p = players[socket.id];
     if (gamePhase === GamePhase.GAME_OVER) return; 
+
+    // HUNTER HEADSTART LOGIC (Freeze hunter for first 15s)
+    if (p && p.role === Role.HUNTER && gamePhase === GamePhase.IN_PROGRESS) {
+        const elapsedTime = gameSettings.roundDuration - gameTimer;
+        if (elapsedTime < gameSettings.headStartDuration) {
+            return; // Ignore movement inputs
+        }
+    }
     
     if (p && !p.isDead && p.role !== Role.SPECTATOR && !p.isDisconnected) {
       p.position = pos;
@@ -329,6 +308,11 @@ io.on('connection', (socket) => {
   socket.on('attemptKill', () => {
       const hunter = players[socket.id];
       if (!hunter || hunter.role !== Role.HUNTER || hunter.isDead || gamePhase !== GamePhase.IN_PROGRESS) return;
+      
+      // Prevent kill during headstart
+      const elapsedTime = gameSettings.roundDuration - gameTimer;
+      if (elapsedTime < gameSettings.headStartDuration) return;
+
       const hiders = Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead);
       for (const hider of hiders) {
           const dx = hunter.position.x - hider.position.x;
@@ -345,18 +329,49 @@ io.on('connection', (socket) => {
       }
   });
 
-  // --- ADMIN UI HANDLERS ---
-  socket.on('updateSettings', (newSettings: GameSettings) => {
+  // --- TASK LOGIC ---
+  socket.on('completeTask', (taskId) => {
+      const p = players[socket.id];
+      if (p && p.role === Role.HIDER && !p.isDead) {
+          const task = p.tasks.find(t => t.id === taskId);
+          if (task && !task.completed) {
+              task.completed = true;
+              socket.emit('currentPlayers', players); // Send back to confirm UI
+              // Optional: Win condition check here if all tasks done
+          }
+      }
+  });
+
+  // --- ADMIN ---
+  socket.on('updateSettings', (newSettings) => {
       if (players[socket.id]?.isAdmin) {
           gameSettings = newSettings;
           db.saveSettings(gameSettings);
           io.emit('settingsUpdated', gameSettings);
-          broadcastGameState(); // Force update
-          sendSystemMessage("Game Settings Updated by Admin.");
+          broadcastGameState();
+          sendSystemMessage("Settings Updated by Admin.");
       }
   });
 
-  socket.on('banPlayer', (targetUsername: string) => {
+  socket.on('addTaskSpawn', (type, position) => {
+      if (players[socket.id]?.isAdmin) {
+          const newTask = db.addTaskSpawn(type, position);
+          taskSpawns.push(newTask);
+          broadcastGameState();
+          sendSystemMessage(`Added spawn for ${type}.`);
+      }
+  });
+
+  socket.on('removeTaskSpawn', (spawnId) => {
+      if (players[socket.id]?.isAdmin) {
+          db.removeTaskSpawn(spawnId);
+          taskSpawns = taskSpawns.filter(t => t.id !== spawnId);
+          broadcastGameState();
+          sendSystemMessage("Removed task spawn.");
+      }
+  });
+
+  socket.on('banPlayer', (targetUsername) => {
       if (players[socket.id]?.isAdmin) {
           const targetUser = db.findUserByUsername(targetUsername);
           if (targetUser) {
@@ -372,25 +387,20 @@ io.on('connection', (socket) => {
       }
   });
 
-  // --- COMMAND SYSTEM ---
   socket.on('chatMessage', (text) => {
       if(!text) return;
       const p = players[socket.id];
       if (!p) return;
-
       const trimmedText = text.trim();
-      
       if (trimmedText.startsWith('/')) {
           const parts = trimmedText.split(' ');
           const command = parts[0].toLowerCase();
           const arg1 = parts[1];
-
-          // Login Admin
           if (command === '/adminpw') {
               if (arg1 === ADMIN_PASSWORD) {
                   p.isAdmin = true;
-                  db.setAdminStatus(p.userId, true); // Save persistence
-                  sendSystemMessage("ACCESS GRANTED. You are now Admin (Saved).", socket.id);
+                  db.setAdminStatus(p.userId, true);
+                  sendSystemMessage("ACCESS GRANTED (Persistent).", socket.id);
                   socket.emit('toggleAdminPanel', true);
                   adminAttempts[p.userId] = 0; 
               } else {
@@ -402,57 +412,24 @@ io.on('connection', (socket) => {
                       socket.emit('forceDisconnect', "BANNED: Too many failed admin attempts.");
                       socket.disconnect();
                   } else {
-                      sendSystemMessage(`ACCESS DENIED. Incorrect password. (${attempts}/3)`, socket.id, true);
+                      sendSystemMessage(`ACCESS DENIED. (${attempts}/3)`, socket.id, true);
                   }
               }
               return; 
           }
-
           if (p.isAdmin) {
-              if (command === '/ban') {
-                  if (!arg1) { sendSystemMessage("Usage: /ban [username]", socket.id, true); return; }
-                  socket.emit('toggleAdminPanel', true); // Open panel for easy management
-                  return;
-              }
+              if (command === '/ban') { socket.emit('toggleAdminPanel', true); return; }
               if (command === '/unban') {
-                  if (!arg1) { sendSystemMessage("Usage: /unban [username]", socket.id, true); return; }
-                  if (db.isBanned(arg1)) {
-                      db.removeBan(arg1);
-                      sendSystemMessage(`User '${arg1}' unbanned.`, socket.id);
-                  } else {
-                      sendSystemMessage(`User '${arg1}' is not banned.`, socket.id, true);
-                  }
+                  if (!arg1) { sendSystemMessage("Usage: /unban [user]", socket.id, true); return; }
+                  if (db.isBanned(arg1)) { db.removeBan(arg1); sendSystemMessage(`Unbanned ${arg1}.`, socket.id); } 
+                  else sendSystemMessage(`Not banned.`, socket.id, true);
                   return;
               }
-              if (command === '/location') {
-                  socket.emit('toggleLocationDisplay', true);
-                  return;
-              }
-              if (command === '/setlocation') {
-                   // Keep existing logic if needed, or point to UI
-                   try {
-                      if (!arg1) throw new Error();
-                      const coords = arg1.split(',');
-                      if (coords.length === 3) {
-                          const x = parseFloat(coords[0]);
-                          const y = parseFloat(coords[1]);
-                          const z = parseFloat(coords[2]);
-                          if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                              db.setSpawnCenter(x, y, z);
-                              sendSystemMessage(`Spawn center updated.`, socket.id);
-                          } else throw new Error();
-                      } else throw new Error();
-                  } catch (e) { sendSystemMessage("Invalid. Use: /setlocation x,y,z", socket.id, true); }
-                  return;
-              }
-              if (command === '/ainfo') {
-                  socket.emit('toggleAdminPanel', true);
-                  return;
-              }
+              if (command === '/location') { socket.emit('toggleLocationDisplay', true); return; }
+              if (command === '/ainfo') { socket.emit('toggleAdminPanel', true); return; }
           }
           return;
       }
-
       io.emit('chatMessage', { id: uuidv4(), sender: p.username, text: trimmedText.substring(0,50), isSystem: false, timestamp: Date.now() });
   });
 
