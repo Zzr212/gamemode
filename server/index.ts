@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { PlayerState, GamePhase, Role, GameSettings, TaskType, PlayerTask, TaskLocation, Vector3 } from '../types.js';
+import { PlayerState, GamePhase, Role, GameSettings, TaskType, TaskLocation } from '../types.js';
 import { db } from './db.js';
 import { v4 as uuidv4 } from 'uuid';
 
