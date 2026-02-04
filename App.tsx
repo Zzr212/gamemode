@@ -35,6 +35,7 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const [lastNotification, setLastNotification] = useState<ChatMessage | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // ADMIN STATE
@@ -119,7 +120,16 @@ function App() {
 
     const onGameMessage = (msg: string) => { if (msg.includes("WIN") || msg.includes("Time")) { setRoleMessage(msg); setTimeout(() => setRoleMessage(null), 4000); } };
     const onPlayerKilled = (id: string) => { if (id === myId) { setRoleMessage("YOU DIED"); setTimeout(() => setRoleMessage(null), 3000); } };
-    const onChatMessage = (msg: ChatMessage) => { setChatMessages(prev => [...prev.slice(-19), msg]); if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); };
+    const onChatMessage = (msg: ChatMessage) => { 
+        setChatMessages(prev => [...prev.slice(-19), msg]); 
+        if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        
+        // Show notification if chat closed
+        if (!isChatOpen) {
+            setLastNotification(msg);
+            setTimeout(() => setLastNotification(null), 4000);
+        }
+    };
     const onToggleLocationDisplay = (_show: boolean) => setShowCoords(prev => !prev);
     const onToggleAdminPanel = (_show: boolean) => setShowAdminPanel(true);
     const onSettingsUpdated = (newSettings: GameSettings) => setGameSettings(newSettings);
@@ -139,7 +149,7 @@ function App() {
     socket.on('settingsUpdated', onSettingsUpdated);
 
     return () => { socket.off('connect', onConnect); socket.off('forceDisconnect', onForceDisconnect); socket.off('currentPlayers', onCurrentPlayers); socket.off('newPlayer', onNewPlayer); socket.off('playerMoved', onPlayerMoved); socket.off('playerDisconnected', onPlayerDisconnected); socket.off('gameStateUpdate', onGameStateUpdate); socket.off('gameMessage', onGameMessage); socket.off('playerKilled', onPlayerKilled); socket.off('chatMessage', onChatMessage); socket.off('toggleLocationDisplay', onToggleLocationDisplay); socket.off('toggleAdminPanel', onToggleAdminPanel); socket.off('settingsUpdated', onSettingsUpdated); };
-  }, [appState, myId]); 
+  }, [appState, myId, isChatOpen]); // Added isChatOpen to dependency for notifications
 
   const handleJoystickMove = (data: JoystickData) => { joystickRef.current = data; };
   const handleCameraRotate = (dx: number, dy: number) => {
@@ -221,11 +231,23 @@ function App() {
             {!isSpectator && <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-white/90 rounded-full -translate-x-1/2 -translate-y-1/2 shadow-sm z-10 pointer-events-none" />}
 
             <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between" style={{padding: 'env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'}}>
-                {/* TOP BAR */}
-                <div className="w-full flex justify-between items-start pt-2 px-2 md:px-4">
-                    {/* CHAT */}
-                    <div className="pointer-events-auto flex flex-col items-start w-1/3 z-50">
-                        {!isChatOpen && <button onClick={() => { setIsChatOpen(true); }} className={`w-10 h-10 bg-black/50 hover:bg-black/70 rounded-full flex items-center justify-center border border-white/10 transition-opacity`}><svg className="w-5 h-5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg></button>}
+                {/* TOP BAR - CENTERED STATS */}
+                <div className="w-full relative flex items-start pt-2 px-2 md:px-4">
+                    
+                    {/* LEFT: CHAT */}
+                    <div className="pointer-events-auto flex flex-col items-start w-1/4 z-50">
+                        {!isChatOpen && (
+                            <div className="flex flex-col gap-2 items-start">
+                                <button onClick={() => { setIsChatOpen(true); }} className={`w-10 h-10 bg-black/50 hover:bg-black/70 rounded-full flex items-center justify-center border border-white/10 transition-opacity`}><svg className="w-5 h-5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg></button>
+                                {/* Chat Notification */}
+                                {lastNotification && (
+                                    <div className="bg-black/60 backdrop-blur text-white text-xs px-2 py-1 rounded border border-white/10 animate-fade-in-out">
+                                        <span className="text-blue-400 font-bold">{lastNotification.sender}: </span>
+                                        {lastNotification.text}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         {isChatOpen && (
                             <div className="w-64 h-48 bg-black/60 backdrop-blur-md rounded-lg border border-white/10 flex flex-col">
                                 <div className="flex justify-between p-2 bg-black/40"><span className="text-[10px] text-gray-400 font-bold">CHAT</span><button onClick={()=>setIsChatOpen(false)} className="text-white">X</button></div>
@@ -235,15 +257,28 @@ function App() {
                         )}
                     </div>
 
-                    {/* STATS */}
-                    <div className="flex items-center gap-2 md:gap-4 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 shadow-lg">
-                         <div className="text-center"><span className="text-[9px] text-gray-400 font-bold block">TIMER</span><span className={`text-lg font-mono font-bold ${timer<30?'text-red-500 animate-pulse':'text-white'}`}>{Math.floor(timer/60)}:{(timer%60).toString().padStart(2,'0')}</span></div>
-                         <div className="w-px h-6 bg-white/20"></div>
-                         <div className="text-center"><span className="text-[9px] text-gray-400 font-bold block">ALIVE</span><span className="text-lg font-mono font-bold text-green-400">{survivors}</span></div>
+                    {/* CENTER: STATS (Absolute Center) */}
+                    <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 md:gap-4 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-lg">
+                         <div className="text-center">
+                            <span className="text-[9px] text-gray-400 font-bold block">ROLE</span>
+                            <span className={`text-lg font-black font-mono ${myPlayer?.role === Role.HUNTER ? 'text-red-500' : 'text-blue-400'}`}>
+                                {myPlayer?.role === Role.HUNTER ? 'HUNTER' : (myPlayer?.role === Role.HIDER ? 'HIDER' : 'SPEC')}
+                            </span>
+                         </div>
+                         <div className="w-px h-8 bg-white/20"></div>
+                         <div className="text-center">
+                            <span className="text-[9px] text-gray-400 font-bold block">TIMER</span>
+                            <span className={`text-lg font-mono font-bold ${timer<30?'text-red-500 animate-pulse':'text-white'}`}>{Math.floor(timer/60)}:{(timer%60).toString().padStart(2,'0')}</span>
+                         </div>
+                         <div className="w-px h-8 bg-white/20"></div>
+                         <div className="text-center">
+                            <span className="text-[9px] text-gray-400 font-bold block">ALIVE</span>
+                            <span className="text-lg font-mono font-bold text-green-400">{survivors}</span>
+                         </div>
                     </div>
 
-                    {/* TASKS + LEAVE */}
-                    <div className="flex gap-4 items-start pointer-events-auto">
+                    {/* RIGHT: TASKS + LEAVE */}
+                    <div className="flex-1 flex justify-end gap-4 items-start pointer-events-auto w-1/4">
                         {!isHunter && !isSpectator && gamePhase === GamePhase.IN_PROGRESS && (
                             <div className="bg-green-900/80 border border-green-500 px-3 py-1 rounded text-green-100 font-bold font-mono">
                                 TASKS: {taskProgress}
@@ -269,7 +304,7 @@ function App() {
                             {/* KILL BUTTON */}
                             {isHunter && gamePhase === GamePhase.IN_PROGRESS && (
                                 <button onPointerDown={handleKill} className={`w-20 h-20 rounded-full border-2 shadow-[0_0_15px_rgba(255,0,0,0.5)] flex items-center justify-center backdrop-blur-sm transition-all mb-2 ${canKill ? 'bg-red-600 border-red-500 opacity-100 scale-110 animate-pulse' : 'bg-red-900/30 border-red-900/50 opacity-40 grayscale'}`}>
-                                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-white"><path d="M12 2C7.58 2 4 5.58 4 10C4 12.03 4.67 13.93 5.86 15.5C5.86 15.5 5.86 15.5 5.86 15.5C5.86 15.5 7 19 7 19H17C17 19 18.14 15.5 18.14 15.5C19.33 13.93 20 12.03 20 10C20 5.58 16.42 2 12 2ZM9.5 9.5C9.5 8.67 10.17 8 11 8C11.83 8 12.5 8.67 12.5 9.5C12.5 10.33 11.83 11 11 11C10.17 11 9.5 10.33 9.5 9.5ZM13.5 15H10.5V14H13.5V15ZM14.5 9.5C14.5 10.33 13.83 11 13 11C12.17 11 11.5 10.33 11.5 9.5C11.5 8.67 12.17 8 13 8C13.83 8 14.5 8.67 14.5 9.5Z" /><path d="M7 20H17V22H7V20Z" /></svg>
+                                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-12 h-12 text-white"><path d="M12 2C7.58 2 4 5.58 4 10C4 12.03 4.67 13.93 5.86 15.5C5.86 15.5 5.86 15.5 5.86 15.5 7 19 7 19H17C17 19 18.14 15.5 18.14 15.5C19.33 13.93 20 12.03 20 10C20 5.58 16.42 2 12 2ZM9.5 9.5C9.5 8.67 10.17 8 11 8C11.83 8 12.5 8.67 12.5 9.5C12.5 10.33 11.83 11 11 11C10.17 11 9.5 10.33 9.5 9.5ZM13.5 15H10.5V14H13.5V15ZM14.5 9.5C14.5 10.33 13.83 11 13 11C12.17 11 11.5 10.33 11.5 9.5C11.5 8.67 12.17 8 13 8C13.83 8 14.5 8.67 14.5 9.5Z" /><path d="M7 20H17V22H7V20Z" /></svg>
                                 </button>
                             )}
                             <button onPointerDown={() => jumpRef.current = true} className="w-16 h-16 bg-blue-600/40 hover:bg-blue-600/60 rounded-full border-2 border-blue-400/50 flex items-center justify-center font-bold text-white text-xs">JUMP</button>
@@ -285,7 +320,12 @@ function App() {
             </div>
         </>
       )}
-      <div className="hidden portrait:flex absolute inset-0 bg-black z-[100] items-center justify-center text-white text-center p-8"><p className="text-xl font-bold">ROTATE DEVICE</p></div>
+      {/* ORIENTATION CHECK ONLY WHEN NOT IN AUTH */}
+      {appState !== 'AUTH' && (
+          <div className="hidden portrait:flex absolute inset-0 bg-black z-[100] items-center justify-center text-white text-center p-8">
+              <p className="text-xl font-bold">ROTATE DEVICE</p>
+          </div>
+      )}
     </div>
   );
 }

@@ -46,6 +46,7 @@ let gameTimer: number = 0;
 let lastHunterUserId: string | null = null;
 const adminAttempts: Record<string, number> = {}; 
 let gameSettings: GameSettings = db.getSettings();
+// Load initial tasks from DB
 let taskSpawns: TaskLocation[] = db.getTaskSpawns();
 
 const COUNTDOWN_TIME = 10;
@@ -144,7 +145,7 @@ function broadcastGameState() {
         timer: gameTimer, 
         survivors: survivors,
         settings: gameSettings,
-        taskSpawns: taskSpawns
+        taskSpawns: taskSpawns // Explicitly send tasks
     });
 }
 
@@ -266,6 +267,15 @@ io.on('connection', (socket) => {
       sendSystemMessage(`${username} reconnected.`);
   } 
 
+  // Send tasks immediately on connection so admin sees them
+  socket.emit('gameStateUpdate', { 
+      phase: gamePhase, 
+      timer: gameTimer, 
+      survivors: Object.values(players).filter(p => p.role === Role.HIDER && !p.isDead).length, 
+      settings: gameSettings, 
+      taskSpawns 
+  });
+
   socket.on('requestGameStart', () => {
       if (players[socket.id]) { socket.emit('currentPlayers', players); broadcastGameState(); return; }
       let initialRole = Role.SPECTATOR;
@@ -337,7 +347,6 @@ io.on('connection', (socket) => {
           if (task && !task.completed) {
               task.completed = true;
               socket.emit('currentPlayers', players); // Send back to confirm UI
-              // Optional: Win condition check here if all tasks done
           }
       }
   });
@@ -356,8 +365,8 @@ io.on('connection', (socket) => {
   socket.on('addTaskSpawn', (type, position) => {
       if (players[socket.id]?.isAdmin) {
           const newTask = db.addTaskSpawn(type, position);
-          taskSpawns.push(newTask);
-          broadcastGameState();
+          taskSpawns.push(newTask); // CRITICAL: Update local memory state immediately
+          broadcastGameState(); // Broadcast new task list
           sendSystemMessage(`Added spawn for ${type}.`);
       }
   });

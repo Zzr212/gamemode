@@ -1,8 +1,8 @@
 import React, { Component, useRef, Suspense, ReactNode, useState, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { PerspectiveCamera, Sky, Loader, PerformanceMonitor, Html, SpotLight, Text } from '@react-three/drei';
+import { PerspectiveCamera, Sky, Loader, PerformanceMonitor, Html, SpotLight } from '@react-three/drei';
 import * as THREE from 'three';
-import { JoystickData, PlayerState, Vector3, Role, GamePhase, GameSettings, TaskLocation } from '../types';
+import { JoystickData, PlayerState, Vector3, Role, GamePhase, GameSettings, TaskLocation, TaskType } from '../types';
 import { PlayerModel } from './PlayerModel';
 import { MapModel } from './MapModel';
 import { socket } from '../services/socketService';
@@ -29,30 +29,34 @@ interface GameSceneProps {
   timer: number;
 }
 
-// --- TASK HOLOGRAM COMPONENT ---
+// --- TASK HOLOGRAM COMPONENT (HTML ICON) ---
 const TaskHologram: React.FC<{ type: string, position: Vector3 }> = ({ type, position }) => {
-    const ref = useRef<THREE.Group>(null);
-    useFrame((state) => {
-        if(ref.current) {
-            ref.current.rotation.y += 0.02;
-            ref.current.position.y = position.y + 1 + Math.sin(state.clock.elapsedTime * 2) * 0.1;
+    const getIcon = (t: string) => {
+        switch(t) {
+            case TaskType.WIRES: return '⚡';
+            case TaskType.DOWNLOAD: return '💾';
+            case TaskType.ANTENNA: return '📡';
+            case TaskType.REFUEL: return '⛽';
+            case TaskType.UNLOCK: return '🔐';
+            case TaskType.SHIELDS: return '🛡️';
+            default: return '🔧';
         }
-    });
+    };
 
     return (
-        <group ref={ref} position={[position.x, position.y, position.z]}>
-            {/* Wrench Icon */}
-            <mesh rotation={[0, 0, Math.PI / 4]}>
-                <boxGeometry args={[0.2, 0.8, 0.05]} />
-                <meshBasicMaterial color="yellow" transparent opacity={0.8} />
+        <group position={[position.x, position.y + 1.5, position.z]}>
+            <Html center distanceFactor={15}>
+                <div className="flex flex-col items-center justify-center animate-bounce">
+                    <div className="text-4xl drop-shadow-[0_0_10px_rgba(255,255,0,0.8)]">
+                        {getIcon(type)}
+                    </div>
+                </div>
+            </Html>
+            {/* Small ground marker */}
+            <mesh position={[0, -1.45, 0]} rotation={[-Math.PI/2, 0, 0]}>
+                <ringGeometry args={[0.3, 0.4, 16]} />
+                <meshBasicMaterial color="yellow" opacity={0.5} transparent />
             </mesh>
-            <mesh position={[0, 0.4, 0]}>
-                <torusGeometry args={[0.15, 0.05, 8, 16, Math.PI * 1.5]} />
-                <meshBasicMaterial color="yellow" transparent opacity={0.8} />
-            </mesh>
-            <Text position={[0, 0.8, 0]} fontSize={0.3} color="yellow" anchorX="center" anchorY="middle">
-                {type}
-            </Text>
         </group>
     );
 };
@@ -107,22 +111,31 @@ const CameraController: React.FC<{
     const playerPos = targetPos.current;
 
     // --- HUNTER CUTSCENE LOGIC ---
-    // If Hunter, Game in Progress, and within the first 15 seconds
+    // Calculate elapsed time correctly. If timer is 299, elapsed is 1.
     const elapsed = roundDuration - timer;
+    
     if (isHunter && gamePhase === GamePhase.IN_PROGRESS && elapsed < headStartDuration) {
         // Cutscene: From High Up (Birds Eye) down to Player
-        const progress = elapsed / headStartDuration; // 0 to 1
+        // progress: 0 (start) -> 1 (end of cutscene)
+        const progress = Math.min(Math.max(elapsed / headStartDuration, 0), 1);
         
-        // Start Position (High above player)
-        const startCamPos = new THREE.Vector3(playerPos.x, playerPos.y + 20, playerPos.z + 10);
+        // Start Position (Very High above player)
+        const startCamPos = new THREE.Vector3(playerPos.x, playerPos.y + 25, playerPos.z + 10);
         // End Position (Standard play view)
         const endCamPos = new THREE.Vector3(playerPos.x, playerPos.y + 4, playerPos.z + 6);
         
-        const currentCamPos = new THREE.Vector3().lerpVectors(startCamPos, endCamPos, progress);
+        // Use an easing function for smooth landing
+        // t*t*(3 - 2*t) is smoothstep
+        const t = progress;
+        const smoothT = t * t * (3 - 2 * t);
+
+        const currentCamPos = new THREE.Vector3().lerpVectors(startCamPos, endCamPos, smoothT);
         
         camera.position.copy(currentCamPos);
         camera.lookAt(playerPos);
-        return; // Skip normal controls
+        // Force update internal currentPos so it doesn't snap when cutscene ends
+        currentPos.current.copy(currentCamPos);
+        return; 
     }
     
     // --- NORMAL CAMERA ---
@@ -223,9 +236,7 @@ const PlayerController: React.FC<{
       }
     }
 
-    // Collision & Gravity (Simplified for brevity - logic remains same as before)
-    // ... [Collision Logic Here] ... 
-    // Re-implementing simplified collision for stability
+    // Collision & Gravity
     let isBlocked = false;
     if (isMoving && mapObject) {
          const moveDir = new THREE.Vector3(moveX, 0, moveZ).normalize();
@@ -322,12 +333,10 @@ export const GameScene: React.FC<GameSceneProps> = ({ joystickData, cameraRotati
 
         {isHunter ? (
              <>
-                 {/* HUNTER VISION FIX: Ambient light is low (0.3) so he can see nearby objects dimly.
-                     Spotlight on player illuminates immediate area.
-                     Fog starts AFTER vision radius to hide distant runners. */}
+                 {/* HUNTER VISION FIX: Increased ambient intensity to 0.5 so it's not pitch black inside radius */}
                  <fog attach="fog" args={['#000000', settings.hunterVisionRadius - 5, settings.hunterVisionRadius + 5]} />
                  <color attach="background" args={['#000000']} />
-                 <ambientLight intensity={0.3} /> 
+                 <ambientLight intensity={0.5} /> 
              </>
         ) : (
             <>
